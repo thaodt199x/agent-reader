@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Session Stream</title>
+  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.0/marked.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ctp: {
+              base: '#1e1e2e',
+              mantle: '#181825',
+              crust: '#11111b',
+              surface0: '#313244',
+              surface1: '#45475a',
+              surface2: '#585b70',
+              overlay0: '#6c7086',
+              overlay1: '#7f849c',
+              subtext0: '#a6adc8',
+              text: '#cdd6f4',
+              lavender: '#b4befe',
+              blue: '#89b4fa',
+              sky: '#89dceb',
+              teal: '#94e2d5',
+              green: '#a6e3a1',
+              yellow: '#f9e2af',
+              peach: '#fab387',
+              maroon: '#eba0ac',
+              red: '#f38ba8',
+              mauve: '#cba6f7',
+              pink: '#f5c2e7',
+              flamingo: '#f2cdcd',
+              rosewater: '#f5e0dc',
+            }
+          },
+          fontFamily: {
+            mono: ['"SF Mono"', '"Fira Code"', '"Cascadia Code"', 'monospace'],
+          },
+          keyframes: {
+            fadeIn: {
+              '0%': { opacity: '0', transform: 'translateY(-4px)' },
+              '100%': { opacity: '1', transform: 'translateY(0)' },
+            }
+          },
+          animation: {
+            fadeIn: 'fadeIn 0.2s ease',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #313244; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #45475a; }
+
+    /* ===== Markdown Prose Styles (Catppuccin) ===== */
+    .prose-markdown { font-size: 13px; line-height: 1.7; color: #cdd6f4; }
+    .prose-markdown p { margin: 0 0 0.6em 0; }
+    .prose-markdown p:last-child { margin-bottom: 0; }
+    .prose-markdown strong { color: #f5e0dc; font-weight: 600; }
+    .prose-markdown em { color: #f2cdcd; font-style: italic; }
+    .prose-markdown a { color: #89b4fa; text-decoration: underline; text-underline-offset: 2px; }
+    .prose-markdown a:hover { color: #89dceb; }
+
+    /* Headings */
+    .prose-markdown h1, .prose-markdown h2, .prose-markdown h3, .prose-markdown h4 { margin: 1em 0 0.4em; font-weight: 700; color: #cba6f7; line-height: 1.3; }
+    .prose-markdown h1 { font-size: 1.4em; border-bottom: 1px solid #313244; padding-bottom: 0.3em; }
+    .prose-markdown h2 { font-size: 1.2em; border-bottom: 1px solid #313244; padding-bottom: 0.25em; }
+    .prose-markdown h3 { font-size: 1.05em; }
+    .prose-markdown h4 { font-size: 0.95em; }
+
+    /* Inline code */
+    .prose-markdown code { font-size: 0.88em; padding: 0.15em 0.4em; border-radius: 4px; background: #181825; color: #fab387; font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+
+    /* Code blocks */
+    .prose-markdown pre { margin: 0.6em 0; padding: 0.75em 1em; border-radius: 8px; background: #11111b; border: 1px solid #313244; overflow-x: auto; }
+    .prose-markdown pre code { padding: 0; background: transparent; color: #cdd6f4; font-size: 0.85em; line-height: 1.6; }
+
+    /* Blockquotes */
+    .prose-markdown blockquote { margin: 0.6em 0; padding: 0.4em 1em; border-left: 3px solid #cba6f7; background: color-mix(in srgb, #cba6f7 8%, #1e1e2e); border-radius: 0 6px 6px 0; color: #a6adc8; }
+    .prose-markdown blockquote p { margin: 0; }
+
+    /* Lists */
+    .prose-markdown ul { margin: 0.4em 0; padding-left: 1.4em; list-style: disc; }
+    .prose-markdown ol { margin: 0.4em 0; padding-left: 1.4em; list-style: decimal; }
+    .prose-markdown li { margin: 0.15em 0; padding-left: 0.2em; }
+    .prose-markdown li::marker { color: #7f849c; }
+    .prose-markdown ul ul { margin-top: 0.15em; }
+
+    /* Task lists */
+    .prose-markdown ul:has(input[type="checkbox"]) { list-style: none; padding-left: 0.5em; }
+    .prose-markdown input[type="checkbox"] { margin-right: 0.4em; accent-color: #cba6f7; }
+
+    /* Tables */
+    .prose-markdown table { margin: 0.6em 0; width: 100%; border-collapse: collapse; font-size: 0.92em; }
+    .prose-markdown th { text-align: left; padding: 0.4em 0.7em; background: #181825; color: #cba6f7; font-weight: 600; border: 1px solid #313244; }
+    .prose-markdown td { padding: 0.4em 0.7em; border: 1px solid #313244; }
+    .prose-markdown tr:nth-child(even) td { background: color-mix(in srgb, #313244 30%, #1e1e2e); }
+
+    /* Horizontal rule */
+    .prose-markdown hr { margin: 1em 0; border: none; border-top: 1px solid #313244; }
+
+    /* Images */
+    .prose-markdown img { max-width: 100%; border-radius: 8px; margin: 0.5em 0; }
+
+    /* Diff / added / removed */
+    .prose-markdown del { color: #f38ba8; text-decoration: line-through; }
+    .prose-markdown ins { color: #a6e3a1; text-decoration: none; }
+
+    /* Responsive sidebar */
+    @media (max-width: 768px) {
+      .sidebar {
+        position: fixed;
+        top: 0;
+        left: -280px;
+        height: 100vh;
+        z-index: 50;
+        transition: left 0.3s ease;
+      }
+      .sidebar.open {
+        left: 0;
+      }
+      .sidebar-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.5);
+        z-index: 40;
+      }
+      .sidebar-overlay.open {
+        display: block;
+      }
+      .main-content {
+        width: 100% !important;
+      }
+      .header-filter {
+        width: 140px !important;
+      }
+    }
+  </style>
+</head>
+<body class="m-0 p-0 font-mono bg-ctp-base text-ctp-text">
+  <!-- Mobile sidebar overlay -->
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+  <div class="flex h-screen">
+    <!-- Sidebar -->
+    <div class="sidebar w-[280px] bg-ctp-mantle border-r border-ctp-surface0 flex flex-col">
+      <div class="p-4 border-b border-ctp-surface0 text-sm font-semibold text-ctp-blue flex items-center justify-between">
+        <span>⚡ Agent Sessions</span>
+        <button class="md:hidden text-ctp-overlay0 hover:text-ctp-text" onclick="toggleSidebar()">✕</button>
+      </div>
+      <div class="flex-1 overflow-y-auto"
+           id="sessionList"
+           hx-get="/sessions"
+           hx-trigger="load"
+           hx-swap="innerHTML">
+        <div class="flex items-center justify-center h-full text-ctp-overlay0 text-sm">Loading sessions...</div>
+      </div>
+    </div>
+
+    <!-- Main -->
+    <div class="main-content flex-1 flex flex-col">
+      <!-- Mobile hamburger -->
+      <button class="md:hidden absolute top-2.5 left-2.5 z-30 p-1.5 rounded-md bg-ctp-surface0 text-ctp-text hover:bg-ctp-surface1" onclick="toggleSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      <div class="px-5 py-2.5 border-b border-ctp-surface0 flex items-center gap-3 bg-ctp-mantle flex-wrap">
+        <div class="w-2 h-2 rounded-full bg-ctp-red transition-colors duration-300" id="statusDot"></div>
+        <span class="text-sm text-ctp-overlay0 shrink-0" id="statusText">Disconnected</span>
+        <div class="flex items-center gap-3 flex-1 min-w-0 overflow-hidden" id="headerSessionInfo"></div>
+        <div class="flex items-center gap-3 ml-auto shrink-0">
+          <span id="eventCount" class="bg-ctp-blue text-ctp-crust text-[10px] px-1.5 py-0.5 rounded-full">0 events</span>
+          <input type="text" class="header-filter px-3 py-1.5 bg-ctp-crust border border-ctp-surface0 rounded-md text-ctp-text text-xs font-mono w-48 placeholder:text-ctp-overlay0 focus:outline-none" id="filterInput" placeholder="Filter...">
+        </div>
+      </div>
+      <div class="flex-1 overflow-y-auto p-5 flex flex-col gap-2" id="eventStream">
+        <div class="flex items-center justify-center h-full text-ctp-overlay0 text-sm">Waiting for events...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const streamEl = document.getElementById('eventStream');
+    const sessionListEl = document.getElementById('sessionList');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const eventCountEl = document.getElementById('eventCount');
+    const filterInput = document.getElementById('filterInput');
+    const headerSessionInfo = document.getElementById('headerSessionInfo');
+
+    let eventCount = 0;
+    let filterText = '';
+    let activeSession = null;
+    let wsRef = null;
+    let currentSessionId = '';
+    let currentModel = '';
+    let currentThinking = '';
+
+    filterInput.addEventListener('input', (e) => {
+      filterText = e.target.value.toLowerCase();
+    });
+
+    // Sidebar toggle for mobile
+    function toggleSidebar() {
+      const sidebar = document.querySelector('.sidebar');
+      const overlay = document.getElementById('sidebarOverlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('open');
+    }
+
+    // WebSocket connection
+    function connect() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${proto}//${location.host}/ws`);
+      wsRef = ws;
+
+      ws.onopen = () => {
+        statusDot.classList.add('bg-ctp-green');
+        statusDot.classList.remove('bg-ctp-red');
+        statusText.textContent = 'Connected';
+        console.log('WebSocket connected');
+        if (activeSession) {
+          ws.send(JSON.stringify({type: 'subscribe', session_id: activeSession}));
+        }
+      };
+
+      ws.onclose = () => {
+        statusDot.classList.remove('bg-ctp-green');
+        statusDot.classList.add('bg-ctp-red');
+        statusText.textContent = 'Disconnected — reconnecting...';
+        setTimeout(connect, 3000);
+      };
+
+      ws.onerror = (err) => {
+        console.error('WebSocket error:', err);
+      };
+
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'event') {
+            onEvent(msg);
+          }
+        } catch (e) {
+          console.error('Parse error:', e);
+        }
+      };
+    }
+
+    function onEvent(msg) {
+      const data = msg.data;
+      if (!data || !data.type) return;
+
+      if (data.type === 'session') {
+        htmx.ajax('GET', '/sessions', { target: '#sessionList', swap: 'innerHTML' });
+      }
+
+      if (filterText && !matchesFilter(data, filterText)) return;
+      if (activeSession && msg.session_id !== activeSession) return;
+
+      eventCount++;
+      eventCountEl.textContent = `${eventCount} events`;
+
+      if (data.type === 'session') {
+        currentSessionId = data.id || '';
+        updateHeaderInfo();
+        return;
+      }
+      if (data.type === 'model_change') {
+        currentModel = `${data.provider || ''} → ${data.modelId || ''}`;
+        updateHeaderInfo();
+        return;
+      }
+      if (data.type === 'thinking_level_change') {
+        currentThinking = data.thinkingLevel || '';
+        updateHeaderInfo();
+        return;
+      }
+
+      if (data.type === 'message') {
+        renderMessage(data, msg.session_id);
+      }
+    }
+
+    function updateHeaderInfo() {
+      let html = '';
+      if (currentSessionId) {
+        html += `<span class="text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap shrink-0" style="background:color-mix(in srgb, #cba6f7 20%, transparent); color:#cba6f7"><span class="opacity-70">Session</span> ${currentSessionId.substring(0, 8)}...</span>`;
+      }
+      if (currentModel) {
+        html += `<span class="text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap shrink-0" style="background:color-mix(in srgb, #fab387 20%, transparent); color:#fab387"><span class="opacity-70">Model</span> ${escapeHTML(currentModel)}</span>`;
+      }
+      if (currentThinking) {
+        html += `<span class="text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap shrink-0" style="background:color-mix(in srgb, #f5c2e7 20%, transparent); color:#f5c2e7"><span class="opacity-70">Thinking</span> ${escapeHTML(currentThinking)}</span>`;
+      }
+      headerSessionInfo.innerHTML = html;
+    }
+
+    function matchesFilter(data, text) {
+      return JSON.stringify(data).toLowerCase().includes(text);
+    }
+
+    function renderMessage(data, sessionID) {
+      const msg = data.message || {};
+      const role = msg.role || 'unknown';
+      if (role !== 'user' && role !== 'assistant' && role !== 'toolResult') return;
+
+      // Clear loading placeholder when first message arrives
+      if (streamEl.children.length === 1) {
+        const first = streamEl.children[0];
+        if (first.textContent && first.textContent.includes('Loading session')) {
+          streamEl.innerHTML = '';
+        }
+      }
+
+      const row = document.createElement('div');
+      row.className = `flex flex-col w-full animate-fadeIn ${role === 'user' ? 'items-end' : role === 'toolResult' ? 'items-start' : 'items-start'}`;
+
+      const time = data.timestamp ? new Date(data.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+
+      // --- toolResult messages ---
+      if (role === 'toolResult') {
+        const isError = msg.isError || false;
+        const toolName = msg.toolName || 'unknown';
+        let detailsStr = '';
+        if (msg.details) {
+          try {
+            detailsStr = typeof msg.details === 'string' ? msg.details : JSON.stringify(JSON.parse(msg.details), null, 2);
+          } catch { detailsStr = JSON.stringify(msg.details); }
+        }
+
+        const isBash = toolName === 'Bash';
+        const collapseId = `collapse-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+        const borderColor = isError ? '#f38ba8' : '#585b70';
+        const headerBg = isError
+          ? 'background:color-mix(in srgb, #f38ba8 15%, #313244)'
+          : 'background:color-mix(in srgb, #f9e2af 15%, #313244)';
+
+        let icon = '📎';
+        if (isBash) icon = '⬛';
+        else if (toolName === 'Read') icon = '📄';
+        else if (toolName === 'Write') icon = '✏️';
+        else if (toolName === 'Edit') icon = '🔧';
+        else if (toolName === 'Glob') icon = '🔍';
+        else if (toolName === 'Grep') icon = '🔎';
+
+        row.innerHTML = `
+          <div class="w-full max-w-[85%] rounded-xl overflow-hidden border border-ctp-surface0" style="border-color:${borderColor}">
+            <button class="w-full flex items-center gap-2 px-3 py-2 text-xs cursor-pointer hover:opacity-90 transition-opacity" style="${headerBg}" onclick="toggleCollapse('${collapseId}', this)">
+              <span class="transition-transform duration-200 text-[10px]">▶</span>
+              <span>${icon}</span>
+              <span class="font-semibold ${isError ? 'text-ctp-red' : 'text-ctp-yellow'}">${escapeHTML(toolName)}</span>
+              ${isError ? '<span class="text-ctp-red text-[10px] ml-auto">Error</span>' : '<span class="text-ctp-overlay0 text-[10px] ml-auto">Result</span>'}
+              <span class="text-ctp-overlay0 text-[10px]">${time}</span>
+            </button>
+            <div id="${collapseId}" class="hidden border-t border-ctp-surface0">
+              <div class="p-3 text-xs leading-relaxed overflow-x-auto" style="background:color-mix(in srgb, #1e1e2e 50%, #11111b);">
+                <pre class="font-mono text-[11px] whitespace-pre-wrap break-words max-h-[400px] overflow-y-auto">${escapeHTML(detailsStr || '(no output)')}</pre>
+              </div>
+            </div>
+          </div>
+        `;
+        streamEl.appendChild(row);
+        scrollIfNeeded();
+        trimStream();
+        return;
+      }
+
+      // --- user / assistant messages ---
+      let bubbleContent = '';
+      if (msg.content && msg.content.length > 0) {
+        msg.content.forEach((block, idx) => {
+          if (block.type === 'text') {
+            bubbleContent += `<div class="${idx > 0 ? 'mt-2' : ''} prose-markdown">${formatText(block.text || '')}</div>`;
+          } else if (block.type === 'thinking') {
+            const collapseId = `collapse-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const thinkingText = block.thinking || '';
+            const truncated = thinkingText.length > 100 ? thinkingText.substring(0, 100) + '…' : thinkingText;
+            bubbleContent += `
+              <div class="${idx > 0 ? 'mt-2' : ''} rounded-lg overflow-hidden border border-ctp-surface0" style="background:color-mix(in srgb, #cba6f7 8%, #313244)">
+                <button class="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs cursor-pointer hover:opacity-90 transition-opacity" onclick="toggleCollapse('${collapseId}', this)">
+                  <span class="transition-transform duration-200 text-[10px]">▶</span>
+                  <span>💭</span>
+                  <span class="font-semibold text-ctp-mauve">Thinking</span>
+                  <span class="text-ctp-overlay0 text-[10px] ml-auto">${escapeHTML(truncated)}</span>
+                </button>
+                <div id="${collapseId}" class="hidden border-t border-ctp-surface0">
+                  <div class="p-3 text-xs leading-relaxed" style="background:color-mix(in srgb, #1e1e2e 50%, #11111b);">
+                    <pre class="font-mono text-[11px] whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto text-ctp-mauve opacity-80">${escapeHTML(thinkingText)}</pre>
+                  </div>
+                </div>
+              </div>`;
+          } else if (block.type === 'toolCall') {
+            const collapseId = `collapse-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const toolName = block.toolCallName || block.name || 'unknown';
+            let argsStr = '';
+            if (block.arguments) {
+              try {
+                argsStr = typeof block.arguments === 'string' ? block.arguments : JSON.stringify(JSON.parse(block.arguments), null, 2);
+              } catch { argsStr = JSON.stringify(block.arguments); }
+            }
+            const isBash = toolName === 'Bash';
+            const isRead = toolName === 'Read';
+            const isWrite = toolName === 'Write';
+            const isEdit = toolName === 'Edit';
+
+            let icon = '🔧';
+            let accentColor = '#fab387';
+            if (isBash) { icon = '⬛'; accentColor = '#f9e2af'; }
+            else if (isRead) { icon = '📄'; accentColor = '#89b4fa'; }
+            else if (isWrite) { icon = '✏️'; accentColor = '#a6e3a1'; }
+            else if (isEdit) { icon = '🔧'; accentColor = '#fab387'; }
+
+            const argsPreview = argsStr.length > 80 ? argsStr.substring(0, 80) + '…' : argsStr;
+
+            bubbleContent += `
+              <div class="${idx > 0 ? 'mt-2' : ''} rounded-lg overflow-hidden border border-ctp-surface0" style="background:color-mix(in srgb, ${accentColor} 10%, #313244)">
+                <button class="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs cursor-pointer hover:opacity-90 transition-opacity" onclick="toggleCollapse('${collapseId}', this)">
+                  <span class="transition-transform duration-200 text-[10px]">▶</span>
+                  <span>${icon}</span>
+                  <span class="font-semibold" style="color:${accentColor}">${escapeHTML(toolName)}</span>
+                  <span class="text-ctp-overlay0 text-[10px] ml-auto">${escapeHTML(argsPreview)}</span>
+                </button>
+                <div id="${collapseId}" class="hidden border-t border-ctp-surface0">
+                  <div class="p-3 text-xs leading-relaxed overflow-x-auto" style="background:color-mix(in srgb, #1e1e2e 50%, #11111b);">
+                    <pre class="font-mono text-[11px] whitespace-pre-wrap break-words max-h-[400px] overflow-y-auto">${escapeHTML(argsStr || '(no arguments)')}</pre>
+                  </div>
+                </div>
+              </div>`;
+          }
+        });
+      }
+
+      if (!bubbleContent) bubbleContent = '<span class="opacity-50">(empty message)</span>';
+
+      const bubbleBg = role === 'user'
+        ? 'background:color-mix(in srgb, #89b4fa 25%, #313244); border-bottom-right-radius: 4px;'
+        : 'background:color-mix(in srgb, #a6e3a1 20%, #313244); border-bottom-left-radius: 4px;';
+
+      row.innerHTML = `
+        <div class="px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed break-words max-w-[75%]" style="${bubbleBg}">${bubbleContent}</div>
+        <div class="text-[10px] text-ctp-overlay0 mt-0.5 px-1 ${role === 'user' ? 'text-right' : ''}">${time}</div>
+      `;
+
+      streamEl.appendChild(row);
+      scrollIfNeeded();
+      trimStream();
+    }
+
+    function toggleCollapse(id, btn) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const isHidden = el.classList.contains('hidden');
+      el.classList.toggle('hidden');
+      const arrow = btn.querySelector('span:first-child');
+      if (arrow) {
+        arrow.style.transform = isHidden ? 'rotate(90deg)' : 'rotate(0deg)';
+      }
+    }
+
+    function formatText(text) {
+      if (typeof marked !== 'undefined') {
+        marked.setOptions({ gfm: true, breaks: true, silent: true });
+        const html = marked.parse(text);
+        // Basic XSS protection: strip dangerous tags/attributes
+        return html
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/on\w+\s*=\s*["'][^"']*["']/gi, '')
+          .replace(/javascript:/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+      }
+      // Fallback: basic formatting if marked hasn't loaded
+      const escaped = escapeHTML(text);
+      return escaped
+        .replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 rounded text-[11px] bg-ctp-crust text-ctp-peach">$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\n/g, '<br>');
+    }
+
+    function scrollIfNeeded() {
+      if (streamEl.scrollHeight - streamEl.scrollTop <= streamEl.clientHeight + 100) {
+        streamEl.scrollTop = streamEl.scrollHeight;
+      }
+    }
+
+    function trimStream() {
+      while (streamEl.children.length > 300) {
+        streamEl.removeChild(streamEl.firstChild);
+      }
+    }
+
+    window.selectSession = function(id) {
+      // Close sidebar on mobile after selection
+      if (window.innerWidth <= 768) {
+        const sidebar = document.querySelector('.sidebar');
+        const overlay = document.getElementById('sidebarOverlay');
+        sidebar.classList.remove('open');
+        overlay.classList.remove('open');
+      }
+
+      if (activeSession === id) {
+        activeSession = null;
+        currentSessionId = '';
+        currentModel = '';
+        currentThinking = '';
+        updateHeaderInfo();
+        if (wsRef && wsRef.readyState === WebSocket.OPEN) {
+          wsRef.send(JSON.stringify({type: 'unsubscribe', session_id: id}));
+        }
+        streamEl.innerHTML = '<div class="flex items-center justify-center h-full text-ctp-overlay0 text-sm">Waiting for events...</div>';
+        eventCount = 0;
+        eventCountEl.textContent = '0 events';
+        statusText.textContent = 'Connected';
+      } else {
+        activeSession = id;
+        currentSessionId = '';
+        currentModel = '';
+        currentThinking = '';
+        updateHeaderInfo();
+        streamEl.innerHTML = '<div class="flex items-center justify-center h-full text-ctp-overlay0 text-sm">Loading session...</div>';
+        eventCount = 0;
+        eventCountEl.textContent = '0 events';
+        if (wsRef && wsRef.readyState === WebSocket.OPEN) {
+          wsRef.send(JSON.stringify({type: 'subscribe', session_id: id}));
+        }
+        statusText.textContent = `Filtered: ${id.substring(0, 8)}...`;
+      }
+
+      document.querySelectorAll('.session-item').forEach(el => {
+        el.classList.remove('bg-ctp-surface0', 'border-l-3', 'border-ctp-blue');
+      });
+      if (activeSession) {
+        const activeEl = document.querySelector(`.session-item[onclick*="${activeSession}"]`);
+        if (activeEl) activeEl.classList.add('bg-ctp-surface0', 'border-l-[3px]', 'border-ctp-blue');
+      }
+    };
+
+    function escapeHTML(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // Style active session item after HTMX swap
+    document.body.addEventListener('htmx:afterOnLoad', function() {
+      if (activeSession) {
+        const activeEl = document.querySelector(`.session-item[onclick*="${activeSession}"]`);
+        if (activeEl) activeEl.classList.add('bg-ctp-surface0', 'border-l-[3px]', 'border-ctp-blue');
+      }
+    });
+
+    connect();
+  </script>
+</body>
+</html>
