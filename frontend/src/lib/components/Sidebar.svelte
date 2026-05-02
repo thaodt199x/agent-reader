@@ -1,15 +1,20 @@
 <script>
   import { sessions, activeSession } from '$lib/stores/session.svelte.js';
-  import { sidebarOpen } from '$lib/stores/ui.svelte.js';
+  import { sidebarOpen, groupByProject } from '$lib/stores/ui.svelte.js';
   import { selectSession } from '$lib/actions/session.js';
 
   let { onNewSession } = $props();
 </script>
 
-<div class="sidebar w-[280px] bg-ctp-mantle border-r border-ctp-surface0 flex flex-col">
+<div class="sidebar w-[280px] h-full bg-ctp-mantle border-r border-ctp-surface0 flex flex-col">
   <div class="p-4 border-b border-ctp-surface0 text-sm font-semibold text-ctp-blue flex items-center justify-between">
     <span>⚡ Sessions</span>
     <div class="flex items-center gap-2">
+      <button
+        class="text-ctp-green hover:text-ctp-teal text-xs font-bold"
+        onclick={() => groupByProject.update(v => !v)}
+        title={$groupByProject ? "Switch to flat list" : "Group by project"}
+      >{$groupByProject ? '📁' : '≡'}</button>
       <button
         class="text-ctp-green hover:text-ctp-teal text-xs font-bold"
         onclick={onNewSession}
