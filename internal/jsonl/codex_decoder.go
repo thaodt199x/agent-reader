@@ -2,6 +2,8 @@ package jsonl
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -178,7 +180,7 @@ func normalizeCodexMessage(timestamp string, raw json.RawMessage) (*Event, bool)
 		return nil, true
 	}
 
-	return marshalCodexEvent(timestamp, "codex-"+shortStableID(timestamp, msg.Role), map[string]interface{}{
+	return marshalCodexEvent(timestamp, "codex-"+shortStableID(timestamp, msg.Role)+"-"+shortHash(raw), map[string]interface{}{
 		"role":    msg.Role,
 		"content": blocks,
 	})
@@ -258,4 +260,9 @@ func shortStableID(timestamp, role string) string {
 		clean = "unknown"
 	}
 	return role + "-" + clean
+}
+
+func shortHash(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])[:12]
 }

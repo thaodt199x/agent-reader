@@ -89,6 +89,23 @@ func TestCodexDecoderNormalizeMessage_Assistant(t *testing.T) {
 	}
 }
 
+func TestCodexDecoderNormalizeMessageIDsDifferForSameTimestampAndRole(t *testing.T) {
+	line1 := `{"timestamp":"2026-05-19T02:39:56.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"first message"}]}}`
+	line2 := `{"timestamp":"2026-05-19T02:39:56.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"second message"}]}}`
+
+	ev1, drop := normalizeCodexLine(line1)
+	if drop {
+		t.Fatal("expected first user message")
+	}
+	ev2, drop := normalizeCodexLine(line2)
+	if drop {
+		t.Fatal("expected second user message")
+	}
+	if ev1.ID == ev2.ID {
+		t.Fatalf("expected distinct event IDs, got %q", ev1.ID)
+	}
+}
+
 func TestCodexDecoderNormalizeFunctionCall(t *testing.T) {
 	line := `{"timestamp":"2026-05-19T02:42:10.685Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"git status --short\",\"workdir\":\"/Users/dt/code/dotfiles\"}","call_id":"call_j9lbx16QVDJBAHnTbcD2DPlZ"}}`
 
