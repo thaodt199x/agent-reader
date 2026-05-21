@@ -39,6 +39,7 @@ func main() {
 	addr := flag.String("addr", ":8081", "HTTP listen address")
 	sessionsDir := flag.String("sessions", "", "Path to .pi/agent/sessions directory")
 	claudeProjectsDir := flag.String("claude-projects", "", "Path to ~/.claude/projects directory")
+	codexSessionsDir := flag.String("codex-sessions", "", "Path to ~/.codex/sessions directory")
 	allowedRoots := flag.String("roots", "", "Comma-separated allowed root folders for filesystem API")
 	flag.Parse()
 
@@ -76,6 +77,15 @@ func main() {
 		*claudeProjectsDir = filepath.Join(home, ".claude", "projects")
 	}
 
+	// Default Codex sessions directory
+	if *codexSessionsDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatalf("cannot determine home directory: %v", err)
+		}
+		*codexSessionsDir = filepath.Join(home, ".codex", "sessions")
+	}
+
 	// Verify pi sessions directory exists
 	info, err := os.Stat(*sessionsDir)
 	if err != nil {
@@ -85,7 +95,7 @@ func main() {
 		log.Fatalf("sessions path is not a directory: %s", *sessionsDir)
 	}
 
-	srv, err := server.New(*sessionsDir, *claudeProjectsDir, *allowedRoots)
+	srv, err := server.New(*sessionsDir, *claudeProjectsDir, *codexSessionsDir, *allowedRoots)
 	if err != nil {
 		log.Fatalf("create server: %v", err)
 	}

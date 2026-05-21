@@ -74,17 +74,19 @@ func (m *rpcManager) Delete(id string) {
 // Server ties together the HTTP server, WebSocket hub, and file watchers.
 type Server struct {
 	hub               *hub.Hub
-	watcher           *watcher.Watcher           // pi-agent watcher
-	claudeWatcher     *watcher.ClaudeWatcher     // Claude Code watcher (may be nil)
+	watcher           *watcher.Watcher       // pi-agent watcher
+	claudeWatcher     *watcher.ClaudeWatcher // Claude Code watcher (may be nil)
+	codexWatcher      *watcher.CodexWatcher  // Codex watcher (may be nil)
 	rpcMgr            *rpcManager
 	sessionsDir       string
 	claudeProjectsDir string
-	fsbrowse          *fsbrowse.Service          // filesystem browsing service (may be nil)
-	llmClient         *llm.LMStudioClient        // local LLM client for translation
+	codexSessionsDir  string
+	fsbrowse          *fsbrowse.Service   // filesystem browsing service (may be nil)
+	llmClient         *llm.LMStudioClient // local LLM client for translation
 }
 
 // New creates a new Server.
-func New(sessionsDir, claudeProjectsDir, allowedRootsCSV string) (*Server, error) {
+func New(sessionsDir, claudeProjectsDir, codexSessionsDir, allowedRootsCSV string) (*Server, error) {
 	w, err := watcher.New(sessionsDir)
 	if err != nil {
 		return nil, fmt.Errorf("create watcher: %w", err)
@@ -98,6 +100,7 @@ func New(sessionsDir, claudeProjectsDir, allowedRootsCSV string) (*Server, error
 		rpcMgr:            newRPCManager(),
 		sessionsDir:       sessionsDir,
 		claudeProjectsDir: claudeProjectsDir,
+		codexSessionsDir:  codexSessionsDir,
 		llmClient:         llm.NewLMStudioClient(),
 	}
 
@@ -119,6 +122,21 @@ func New(sessionsDir, claudeProjectsDir, allowedRootsCSV string) (*Server, error
 			}
 		} else {
 			log.Printf("[server] Claude projects dir not found, skipping: %s", claudeProjectsDir)
+		}
+	}
+
+	// Try to create Codex watcher (optional — skip if dir doesn't exist)
+	if codexSessionsDir != "" {
+		if info, err := os.Stat(codexSessionsDir); err == nil && info.IsDir() {
+			cw, err := watcher.NewCodexWatcher(codexSessionsDir)
+			if err != nil {
+				log.Printf("[server] warning: could not create Codex watcher: %v", err)
+			} else {
+				s.codexWatcher = cw
+				log.Printf("[server] Codex watcher enabled: %s", codexSessionsDir)
+			}
+		} else {
+			log.Printf("[server] Codex sessions dir not found, skipping: %s", codexSessionsDir)
 		}
 	}
 
@@ -183,6 +201,10 @@ func (s *Server) Start(addr string) error {
 		go s.hub.SubscribeClaudeWatcher(s.claudeWatcher)
 		s.claudeWatcher.Start()
 	}
+	if s.codexWatcher != nil {
+		go s.hub.SubscribeCodexWatcher(s.codexWatcher)
+		s.codexWatcher.Start()
+	}
 
 	return http.ListenAndServe(addr, mux)
 }
@@ -202,6 +224,9 @@ func (s *Server) Stop() {
 	s.watcher.Stop()
 	if s.claudeWatcher != nil {
 		s.claudeWatcher.Stop()
+	}
+	if s.codexWatcher != nil {
+		s.codexWatcher.Stop()
 	}
 }
 
@@ -387,8 +412,6 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(found)
 }
-
-
 
 // handleSessionCreate creates a new session with a given cwd and starts RPC.
 func (s *Server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
@@ -611,8 +634,8 @@ func (s *Server) handleFSRead(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"content": content,
+		"success":   true,
+		"content":   content,
 		"truncated": len(content) >= 32*1024,
 	})
 }
@@ -934,9 +957,9 @@ func (s *Server) handleRPCSetModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := sess.SendCommandAndWait(map[string]interface{}{
-		"type":    "set_model",
+		"type":     "set_model",
 		"provider": req.Provider,
-		"modelId": req.ModelID,
+		"modelId":  req.ModelID,
 	}, 10*time.Second)
 	if err != nil {
 		log.Printf("[server] rpc set_model error: %v", err)
@@ -1266,7 +1289,45 @@ func (s *Server) onSubscribe(sessionID string, client *hub.Client) {
 
 	log.Printf("[server] replaying session %s (agent=%s) from %s", sessionID, sessionAgent, sessionFile)
 
-	if sessionAgent == "claude" {
+	if sessionAgent == "codex" {
+		dec, err := jsonl.NewCodexDecoder(sessionFile, 0)
+		if err != nil {
+			log.Printf("[server] open codex decoder: %v", err)
+			return
+		}
+		defer dec.Close()
+
+		for {
+			event, err := dec.Next()
+			if err != nil {
+				break
+			}
+			if event == nil {
+				continue
+			}
+
+			msg := hub.WSMessage{
+				Type:      "event",
+				SessionID: sessionID,
+				Data:      event.Raw,
+				Time:      time.Now(),
+			}
+			data, err := json.Marshal(msg)
+			if err != nil {
+				continue
+			}
+
+			select {
+			case <-client.Closed():
+				return
+			default:
+			}
+			select {
+			case client.Send() <- data:
+			default:
+			}
+		}
+	} else if sessionAgent == "claude" {
 		// Use Claude decoder to normalize events
 		dec, err := jsonl.NewClaudeDecoder(sessionFile, 0)
 		if err != nil {
@@ -1368,24 +1429,24 @@ func (s *Server) findSessionFile(sessionID string) string {
 
 // SessionInfo is returned by the /api/sessions endpoint.
 type SessionInfo struct {
-	ID              string    `json:"id"`
-	Project         string    `json:"project"`
-	CWD             string    `json:"cwd"`
-	Model           string    `json:"model"`
-	ContextWindow   int64     `json:"context_window"`
-	Agent           string    `json:"agent"`
-	Timestamp       time.Time `json:"timestamp"`
+	ID               string    `json:"id"`
+	Project          string    `json:"project"`
+	CWD              string    `json:"cwd"`
+	Model            string    `json:"model"`
+	ContextWindow    int64     `json:"context_window"`
+	Agent            string    `json:"agent"`
+	Timestamp        time.Time `json:"timestamp"`
 	FirstUserMessage string    `json:"first_user_message"`
 	LastMessageTime  string    `json:"last_message_time"`
 	File             string    `json:"file"`
-	LineCount       int       `json:"line_count"`
-	InputTokens     int64     `json:"input_tokens"`
-	OutputTokens    int64     `json:"output_tokens"`
-	TotalTokens     int64     `json:"total_tokens"`
-	TotalCost       float64   `json:"total_cost"`
+	LineCount        int       `json:"line_count"`
+	InputTokens      int64     `json:"input_tokens"`
+	OutputTokens     int64     `json:"output_tokens"`
+	TotalTokens      int64     `json:"total_tokens"`
+	TotalCost        float64   `json:"total_cost"`
 }
 
-// listSessions scans both pi-agent and Claude Code session directories.
+// listSessions scans pi-agent, Claude Code, and Codex session directories.
 func (s *Server) listSessions() []SessionInfo {
 	var sessions []SessionInfo
 
@@ -1456,6 +1517,53 @@ func (s *Server) listSessions() []SessionInfo {
 		})
 	}
 
+	// Scan Codex sessions
+	if s.codexSessionsDir != "" {
+		filepath.WalkDir(s.codexSessionsDir, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+				return nil
+			}
+
+			meta, ok := readCodexSessionInfo(path)
+			if !ok {
+				return nil
+			}
+
+			info := SessionInfo{
+				ID:      meta.ID,
+				File:    path,
+				Agent:   "codex",
+				CWD:     meta.CWD,
+				Project: filepath.Base(meta.CWD),
+				Model:   meta.Model,
+			}
+
+			info.LineCount, info.CWD, info.Model, info.InputTokens, info.OutputTokens, info.TotalTokens, info.TotalCost, info.ContextWindow = aggregateSessionData(path, "codex")
+			if info.CWD == "" {
+				info.CWD = meta.CWD
+			}
+			if info.Model == "" {
+				info.Model = meta.Model
+			}
+			if info.Project == "." || info.Project == "" {
+				if info.CWD != "" {
+					info.Project = filepath.Base(info.CWD)
+				} else {
+					info.Project = filepath.Base(filepath.Dir(path))
+				}
+			}
+			info.FirstUserMessage = getFirstUserMessage(path, "codex")
+			info.LastMessageTime = getLastMessageTime(path)
+
+			if fi, err := d.Info(); err == nil {
+				info.Timestamp = fi.ModTime()
+			}
+
+			sessions = append(sessions, info)
+			return nil
+		})
+	}
+
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].Timestamp.After(sessions[j].Timestamp)
 	})
@@ -1467,6 +1575,28 @@ func (s *Server) listSessions() []SessionInfo {
 func countLinesAndCWD(path string) (int, string, string) {
 	lineCount, cwd, model, _, _, _, _, _ := aggregateSessionData(path, "pi")
 	return lineCount, cwd, model
+}
+
+func readCodexSessionInfo(path string) (jsonl.CodexSessionMeta, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return jsonl.CodexSessionMeta{}, false
+	}
+	defer f.Close()
+
+	scanner := NewLineScanner(f, make([]byte, 32*1024))
+	for scanner.Scan() {
+		meta, ok := jsonl.ParseCodexSessionMeta(scanner.Bytes())
+		if !ok {
+			continue
+		}
+		if jsonl.IsCodexUserSession(meta) {
+			return meta, true
+		}
+		return jsonl.CodexSessionMeta{}, false
+	}
+
+	return jsonl.CodexSessionMeta{}, false
 }
 
 // getContextWindow returns the context window size for a given model ID.
@@ -1556,6 +1686,40 @@ func aggregateSessionData(path string, agent string) (lineCount int, cwd string,
 	for scanner.Scan() {
 		count++
 		line := scanner.Bytes()
+
+		if agent == "codex" {
+			if meta, ok := jsonl.ParseCodexSessionMeta(line); ok {
+				if cwd == "" {
+					cwd = meta.CWD
+				}
+				if model == "" {
+					model = meta.Model
+				}
+				continue
+			}
+			if model == "" {
+				var ctx struct {
+					Type    string `json:"type"`
+					Model   string `json:"model"`
+					Payload struct {
+						Type  string `json:"type"`
+						Model string `json:"model"`
+					} `json:"payload"`
+				}
+				if json.Unmarshal(line, &ctx) == nil {
+					if ctx.Type == "turn_context" {
+						if ctx.Model != "" {
+							model = ctx.Model
+						} else if ctx.Payload.Model != "" {
+							model = ctx.Payload.Model
+						}
+					} else if ctx.Type == "response_item" && ctx.Payload.Type == "turn_context" && ctx.Payload.Model != "" {
+						model = ctx.Payload.Model
+					}
+				}
+			}
+			continue
+		}
 
 		if agent == "pi" {
 			// pi-agent: cwd from first-line session event
@@ -1683,6 +1847,18 @@ func getFirstUserMessage(path string, agent string) string {
 				for _, block := range evt.Message.Content {
 					if block.Type == "text" && block.Text != "" {
 						return truncateMessage(block.Text)
+					}
+				}
+			}
+		} else if agent == "codex" {
+			var env jsonl.CodexEnvelope
+			if json.Unmarshal(line, &env) == nil && env.Type == "response_item" {
+				var msg jsonl.CodexMessage
+				if json.Unmarshal(env.Payload, &msg) == nil && msg.Type == "message" && msg.Role == "user" {
+					for _, block := range msg.Content {
+						if (block.Type == "input_text" || block.Type == "text") && block.Text != "" {
+							return truncateMessage(block.Text)
+						}
 					}
 				}
 			}
