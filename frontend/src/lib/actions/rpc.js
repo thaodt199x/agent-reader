@@ -1,8 +1,9 @@
-import { activeSession } from '$lib/stores/session.svelte.js';
+import { activeSession, sessions } from '$lib/stores/session.svelte.js';
 import { isStreaming, rpcAutoStarting, warnedSessions, setRpcRunning, isRpcRunning } from '$lib/stores/rpc.svelte.js';
 import { messages } from '$lib/stores/messages.svelte.js';
 import { startRPC, stopRPC, sendRPC } from '$lib/api/rpc.js';
 import { addSystemMessage } from '$lib/utils/events.js';
+import { findSession, readOnlySessionLabel, sessionSupportsRPC } from '$lib/utils/sessionCapabilities.js';
 
 /**
  * Build the prompt text with injected image paths.
@@ -50,6 +51,14 @@ export async function toggleRPC() {
  */
 export async function ensureRpcRunning(sessionId) {
   if (!sessionId) return false;
+
+  let sessionList = [];
+  sessions.subscribe(v => { sessionList = v || []; })();
+  const session = findSession(sessionList, sessionId);
+  if (session && !sessionSupportsRPC(session)) {
+    addSystemMessage(`${readOnlySessionLabel(session)} because RPC mode is only available for pi sessions.`);
+    return false;
+  }
 
   const currentRpc = isRpcRunning(sessionId);
   if (currentRpc) return true;

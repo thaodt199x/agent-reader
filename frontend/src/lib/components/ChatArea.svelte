@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { messages } from '$lib/stores/messages.svelte.js';
   import { rpcRunning, isStreaming, rpcAutoStarting } from '$lib/stores/rpc.svelte.js';
-  import { activeSession } from '$lib/stores/session.svelte.js';
+  import { activeSession, sessions } from '$lib/stores/session.svelte.js';
   import { userScrolledUp, newMessageCount } from '$lib/stores/messages.svelte.js';
   import { sendMessage, abortRPC, ensureRpcRunning } from '$lib/actions/rpc.js';
   import { MessageSquare, Lightbulb, Wrench, Image, X, Paperclip, ChevronUp, RefreshCw, Check } from '@lucide/svelte';
@@ -19,6 +19,8 @@
   import { getRPCCOmmands, uploadImage, getAvailableModels, setModel, cycleModel } from '$lib/api/rpc.js';
   import { sessionCommands, commandsLoading } from '$lib/stores/commands.svelte.js';
   import { availableModels, setModelsForSession, clearModelsForSession } from '$lib/stores/models.svelte.js';
+  import { computeDisplayGroups } from '$lib/utils/displayGroups.js';
+  import { findSession, readOnlySessionLabel, sessionSupportsRPC } from '$lib/utils/sessionCapabilities.js';
 
   let input = $state('');
   let textareaEl = $state(null);
@@ -52,28 +54,10 @@
   const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
   const MAX_IMAGES = 5;
 
-  /**
-   * Group consecutive toolResult messages into a single display item.
-   */
-  function computeDisplayGroups(msgs) {
-    const items = [];
-    let group = null;
-    for (const msg of msgs) {
-      if (msg.role === 'toolResult') {
-        if (!group) {
-          group = { type: 'toolGroup', results: [], groupId: 'tg-' + msg.id };
-          items.push(group);
-        }
-        group.results.push(msg);
-      } else {
-        group = null;
-        items.push({ type: 'message', msg });
-      }
-    }
-    return items;
-  }
-
   let displayGroups = $state([]);
+  let activeSessionInfo = $derived(findSession($sessions, $activeSession));
+  let activeSessionCanChat = $derived(Boolean($activeSession && activeSessionInfo && sessionSupportsRPC(activeSessionInfo)));
+  let activeSessionIsReadOnly = $derived(Boolean($activeSession && activeSessionInfo && !sessionSupportsRPC(activeSessionInfo)));
 
   /**
    * Add an image file, uploading it to the backend first.
@@ -152,6 +136,7 @@
   function handleDrop(e) {
     e.preventDefault();
     isDragOver = false;
+    if (!activeSessionCanChat) return;
     const files = e.dataTransfer?.files;
     if (files) {
       Array.from(files).forEach(addImage);
@@ -247,6 +232,7 @@
   async function toggleModelPicker(e) {
     e.preventDefault();
     e.stopPropagation();
+    if (!activeSessionCanChat) return;
     if (showModelPicker) {
       closeModelPicker();
     } else {
@@ -352,6 +338,8 @@
   });
 
   function handleSend() {
+    if (!activeSessionCanChat) return;
+
     const text = input.trim();
     const images = [...pendingImages];
 
@@ -410,7 +398,7 @@
     // Read `input` reactively
     const _ = input;
     const activeId = $activeSession;
-    if (!activeId) {
+    if (!activeId || !activeSessionCanChat) {
       showPalette = false;
       return;
     }
@@ -456,7 +444,7 @@
   $effect(() => {
     const _ = input;
     const activeId = $activeSession;
-    if (!activeId) {
+    if (!activeId || !activeSessionCanChat) {
       showFileMention = false;
       return;
     }
@@ -640,6 +628,7 @@
       </div>
     {/if}
 
+    {#if !activeSessionIsReadOnly}
     <div class="px-4 pt-3 pb-2 relative z-[20]">
       <!-- Image Previews -->
       {#if pendingImages.length > 0}
@@ -705,8 +694,8 @@
             class="w-full px-4 py-3 bg-ctp-base border border-ctp-crust rounded-xl text-ctp-text text-base resize-none focus:outline-none focus:border-ctp-blue focus:ring-1 focus:ring-ctp-blue/20 placeholder:text-ctp-overlay0 transition-colors"
             class:border-ctp-blue={isDragOver}
             rows="3"
-            placeholder={$activeSession ? (isDragOver ? 'Drop image here...' : 'Message the agent...') : 'Select a session to begin...'}
-            disabled={$activeSession === null}
+            placeholder={$activeSession ? (activeSessionCanChat ? (isDragOver ? 'Drop image here...' : 'Message the agent...') : readOnlySessionLabel(activeSessionInfo)) : 'Select a session to begin...'}
+            disabled={!activeSessionCanChat}
             onkeydown={handleKeydown}
             oninput={() => autoResize(textareaEl)}
             onpaste={handlePaste}
@@ -715,14 +704,14 @@
             class="absolute right-2 bottom-3 p-1.5 text-ctp-overlay1 hover:text-ctp-blue hover:bg-ctp-crust/50 rounded-lg transition-all flex items-center justify-center cursor-pointer"
             onclick={() => fileInputEl?.click()}
             title="Attach image"
-            disabled={$activeSession === null}
+            disabled={!activeSessionCanChat}
           >
             <Paperclip size={16} />
           </button>
         </div>
         <button
           class="px-5 py-3 rounded-xl text-sm font-semibold bg-ctp-blue text-white hover:bg-ctp-blue/90 active:scale-[0.97] transition-all disabled:opacity-30 disabled:cursor-not-allowed disabled:active:scale-100 shrink-0 self-end"
-          disabled={$activeSession === null || pendingImages.some(img => img.uploading)}
+          disabled={!activeSessionCanChat || pendingImages.some(img => img.uploading)}
           onclick={handleSend}
         >
           {#if pendingImages.some(img => img.uploading)}
@@ -744,7 +733,10 @@
           bind:this={modelBtnRef}
           class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] transition-colors cursor-pointer
                  bg-ctp-blue/8 text-ctp-blue hover:bg-ctp-blue/15"
-          title="Click to change model"
+          class:opacity-40={!activeSessionCanChat}
+          class:cursor-not-allowed={!activeSessionCanChat}
+          disabled={!activeSessionCanChat}
+          title={activeSessionCanChat ? 'Click to change model' : 'Model switching requires a pi RPC session'}
           onclick={toggleModelPicker}
         >
           {#if switchingModel}
@@ -766,7 +758,7 @@
               style="background: {activeRpcRunning() || $rpcAutoStarting ? '#65b73b' : '#888888'}"
             ></div>
             <span>
-              {$rpcAutoStarting ? 'Starting' : (activeRpcRunning() ? 'RPC active' : 'Idle')}
+              {!$activeSession ? 'Idle' : (!activeSessionCanChat ? 'Read-only' : ($rpcAutoStarting ? 'Starting' : (activeRpcRunning() ? 'RPC active' : 'Idle')))}
             </span>
           </div>
           {#if $isStreaming}
@@ -780,9 +772,10 @@
         </div>
       </div>
     </div>
+    {/if}
  
     <!-- Model Dropdown Panel - positioned above the model button -->
-    {#if showModelPicker}
+    {#if showModelPicker && !activeSessionIsReadOnly}
       <div
         bind:this={modelDropdownEl}
         class="absolute z-[30] left-4 bottom-full mb-2 w-80 bg-ctp-base border border-ctp-crust rounded-xl shadow-2xl overflow-hidden animate-fadeIn"
