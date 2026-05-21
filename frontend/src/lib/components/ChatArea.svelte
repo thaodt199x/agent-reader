@@ -16,6 +16,7 @@
   import CommandPalette from './CommandPalette.svelte';
   import FileMentionPalette from './FileMentionPalette.svelte';
   import { isAtBottom, autoResize, syncHorizontalScroll } from '$lib/utils/scroll.js';
+  import { computeDisplayGroups } from '$lib/utils/displayGroups.js';
   import { getRPCCOmmands, uploadImage, getAvailableModels, setModel, cycleModel } from '$lib/api/rpc.js';
   import { sessionCommands, commandsLoading } from '$lib/stores/commands.svelte.js';
   import { availableModels, setModelsForSession, clearModelsForSession } from '$lib/stores/models.svelte.js';
@@ -56,24 +57,6 @@
   /**
    * Group consecutive toolResult messages into a single display item.
    */
-  function computeDisplayGroups(msgs) {
-    const items = [];
-    let group = null;
-    for (const msg of msgs) {
-      if (msg.role === 'toolResult') {
-        if (!group) {
-          group = { type: 'toolGroup', results: [], groupId: 'tg-' + msg.id };
-          items.push(group);
-        }
-        group.results.push(msg);
-      } else {
-        group = null;
-        items.push({ type: 'message', msg });
-      }
-    }
-    return items;
-  }
-
   let displayGroups = $state([]);
   let activeSessionInfo = $derived(findSession($sessions, $activeSession));
   let activeSessionCanChat = $derived(Boolean($activeSession && activeSessionInfo && sessionSupportsRPC(activeSessionInfo)));
