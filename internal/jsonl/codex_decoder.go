@@ -118,8 +118,16 @@ func (d *CodexDecoder) Next() (*Event, error) {
 			}
 		}
 
-		d.offset += int64(len(line))
 		trimmed := strings.TrimSpace(line)
+		if err == io.EOF && trimmed != "" && !json.Valid([]byte(trimmed)) {
+			if _, seekErr := d.file.Seek(lineStartOffset, io.SeekStart); seekErr != nil {
+				return nil, fmt.Errorf("seek %s: %w", d.path, seekErr)
+			}
+			d.reader.Reset(d.file)
+			return nil, io.EOF
+		}
+
+		d.offset += int64(len(line))
 		if trimmed == "" {
 			if err == io.EOF {
 				return nil, io.EOF

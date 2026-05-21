@@ -2,6 +2,7 @@ package jsonl
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"testing"
 )
@@ -215,5 +216,55 @@ func TestCodexDecoderNextMessageIDsDifferForIdenticalMessagesAtDifferentOffsets(
 	}
 	if ev1.ID == ev2.ID {
 		t.Fatalf("expected distinct event IDs, got %q", ev1.ID)
+	}
+}
+
+func TestCodexDecoderRetriesPartialLineAtEOF(t *testing.T) {
+	partial := `{"timestamp":"2026-05-19T02:39:56.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello`
+	remainder := `"}]}}`
+	path := t.TempDir() + "/partial-test.jsonl"
+	if err := os.WriteFile(path, []byte(partial), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	dec, err := NewCodexDecoder(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dec.Close()
+
+	ev, err := dec.Next()
+	if err != io.EOF {
+		t.Fatalf("expected EOF for partial line, got event=%#v err=%v", ev, err)
+	}
+	if dec.Offset() != 0 {
+		t.Fatalf("partial line advanced offset to %d", dec.Offset())
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(remainder + "\n"); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ev, err = dec.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev == nil {
+		t.Fatal("expected completed line event")
+	}
+	var msg MessageEvent
+	if err := json.Unmarshal(ev.Raw, &msg); err != nil {
+		t.Fatal(err)
+	}
+	if got := msg.Message.Content[0].Text; got != "hello" {
+		t.Fatalf("unexpected text: %q", got)
 	}
 }
