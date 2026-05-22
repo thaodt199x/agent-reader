@@ -60,7 +60,6 @@
     class="w-2 h-2 rounded-full transition-colors duration-300"
     style="background: {$wsConnected ? '#65b73b' : '#e95f59'}"
   ></div>
-  <span class="text-sm text-ctp-overlay0 shrink-0">{$wsConnected ? 'Connected' : 'Disconnected'}</span>
 
   <div class="flex-1 min-w-0 overflow-hidden flex items-center gap-2">
     {#if sessionInfo}
@@ -90,7 +89,7 @@
     {/if}
   </div>
 
-  {#if sessionInfo?.cwd}
+  {#if sessionInfo?.cwd && sessionInfo?.agent === 'pi'}
     <button
       class="px-2.5 py-0.5 rounded-md text-[11px] font-semibold bg-ctp-green/12 text-ctp-green hover:bg-ctp-green/20 transition-colors inline-flex items-center gap-1"
       disabled={creating}
@@ -106,7 +105,7 @@
     </button>
   {/if}
 
-  {#if $activeSession}
+  {#if $activeSession && sessionInfo?.agent === 'pi'}
     <button
       class="px-3 py-1 rounded-md text-xs font-semibold bg-ctp-red/15 text-ctp-red hover:bg-ctp-red/25 transition-colors"
       onclick={quitSession}

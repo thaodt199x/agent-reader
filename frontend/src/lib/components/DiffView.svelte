@@ -1,13 +1,18 @@
 <script>
   import { escapeHTML } from '$lib/utils/markdown.js';
-  import { ChevronRight, ChevronDown, FilePenLine } from '@lucide/svelte';
+  import { ChevronRight, ChevronDown, FilePenLine, PanelLeft, PanelRight, Columns } from '@lucide/svelte';
 
   let { filePath, edits } = $props();
 
   let collapsed = $state(false);
+  let viewMode = $state('side-by-side'); // 'side-by-side' | 'unified'
 
   function toggle() {
     collapsed = !collapsed;
+  }
+
+  function cycleViewMode() {
+    viewMode = viewMode === 'side-by-side' ? 'unified' : 'side-by-side';
   }
 
   /**
@@ -16,19 +21,14 @@
    *   { type: 'context', text, oldLine, newLine }
    *   { type: 'ellipsis', count }
    *   { type: 'changed', pairs: [{ oldText, newText?, oldLine, newLine? }] }
-   *
-   * For changed segments, consecutive removed+added lines are paired
-   * for inline character-level diff display.
    */
   function computeDiff(oldText, newText) {
     const oldLines = (oldText ?? '').split('\n');
     const newLines = (newText ?? '').split('\n');
 
-    // Simple LCS-based diff
     const m = oldLines.length;
     const n = newLines.length;
 
-    // Build LCS table
     const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
     for (let i = 1; i <= m; i++) {
       for (let j = 1; j <= n; j++) {
@@ -40,7 +40,6 @@
       }
     }
 
-    // Backtrack to produce ops
     let i = m, j = n;
     const ops = [];
 
@@ -59,7 +58,6 @@
 
     ops.reverse();
 
-    // Group into segments with paired changes for inline diff
     const MAX_CONTEXT = 3;
     const segments = [];
     let removedBuf = [];
@@ -69,7 +67,6 @@
     function flushChangePair() {
       if (removedBuf.length === 0 && addedBuf.length === 0) return;
 
-      // Pair removed and added lines for inline diff
       const pairs = [];
       const maxLen = Math.max(removedBuf.length, addedBuf.length);
       for (let k = 0; k < maxLen; k++) {
@@ -110,16 +107,13 @@
 
     for (const op of ops) {
       if (op.type === 'context') {
-        // If we have buffered changes, flush them first
         if (removedBuf.length > 0 || addedBuf.length > 0) {
           flushChangePair();
-          // Context after a change goes directly to buffer
           contextBuf.push(op);
         } else {
           contextBuf.push(op);
         }
       } else {
-        // Flush any pending context before a change
         if (contextBuf.length > 0) {
           flushContext();
         }
@@ -131,37 +125,26 @@
       }
     }
 
-    // Flush remaining
     flushChangePair();
     flushContext();
 
     return segments;
   }
 
-  /**
-   * Escape code for HTML display.
-   */
   function highlight(line) {
     return escapeHTML(line || '');
   }
 
-  /**
-   * Given highlighted HTML and a raw text character range [start, end),
-   * extract the corresponding HTML by counting only raw characters.
-   */
   function extractHighlightedRange(hlHtml, start, end) {
     let pos = 0;
     let i = 0;
     const len = hlHtml.length;
 
-    // Skip to start
     while (i < len && pos < start) {
       if (hlHtml[i] === '<') {
-        // Skip entire tag
         while (i < len && hlHtml[i] !== '>') i++;
         i++;
       } else {
-        // Check for &amp; &lt; &gt; entities
         if (hlHtml.substring(i, i + 5) === '&amp;' || hlHtml.substring(i, i + 4) === '&lt;' || hlHtml.substring(i, i + 4) === '&gt;' || hlHtml.substring(i, i + 6) === '&#39;' || hlHtml.substring(i, i + 6) === '&quot;') {
           const semi = hlHtml.indexOf(';', i);
           if (semi !== -1) i = semi + 1;
@@ -174,7 +157,6 @@
     }
     const rangeStart = i;
 
-    // Find end
     while (i < len && pos < end) {
       if (hlHtml[i] === '<') {
         while (i < len && hlHtml[i] !== '>') i++;
@@ -192,43 +174,19 @@
     }
     const rangeEnd = i;
 
-    // Now we need to include any open tags from rangeStart through rangeEnd
-    // Find the tag context at rangeStart
-    let tagContext = '';
-    let j = 0;
-    while (j < rangeStart) {
-      if (hlHtml[j] === '<' && (j + 1 >= hlHtml.length || hlHtml[j + 1] !== '/')) {
-        // Opening tag - extract it
-        let endTag = hlHtml.indexOf('>', j);
-        if (endTag !== -1 && endTag < rangeStart) {
-          tagContext = hlHtml.substring(j, endTag + 1);
-          j = endTag + 1;
-        } else break;
-      } else {
-        j++;
-      }
-    }
-
-    // Collect all closing tags we need between rangeEnd and end of their tags
-    let closingTags = '';
-    let k = rangeEnd;
-    // Find any open tags that started before rangeEnd but haven't closed
     const openStack = [];
-    j = 0;
+    let j = 0;
     while (j < rangeEnd) {
       if (hlHtml[j] === '<') {
         if (hlHtml[j + 1] === '/') {
-          // Closing tag - pop
           openStack.pop();
           let endTag = hlHtml.indexOf('>', j);
           j = endTag + 1;
         } else {
-          // Opening tag
           let endTag = hlHtml.indexOf('>', j);
           if (endTag !== -1) {
             const tag = hlHtml.substring(j, endTag + 1);
             if (endTag < rangeStart) {
-              // This tag started before our range, we need to reopen it
               openStack.push(tag);
             }
             j = endTag + 1;
@@ -239,7 +197,6 @@
       }
     }
 
-    // Build result: reopen tags + content + close tags
     let result = '';
     for (const tag of openStack) {
       result += tag;
@@ -252,11 +209,6 @@
     return result;
   }
 
-  /**
-   * Render a line with syntax highlighting and optional inline diff.
-   * For context lines: just highlight.
-   * For changed lines: highlight + wrap changed portion.
-   */
   function renderHighlightedLine(rawLine, changedStart, changedEnd, className) {
     const hl = highlight(rawLine);
     if (changedStart === undefined || changedEnd === undefined || changedStart >= changedEnd) {
@@ -268,25 +220,19 @@
     return before + '<span class="' + className + '">' + changed + '</span>' + after;
   }
 
-  /**
-   * Render the old line with syntax highlighting and deletions marked.
-   */
   function renderOldLine(oldLine, newLine) {
     if (oldLine === undefined) return '';
     if (newLine === undefined) {
-      // Pure deletion, highlight whole line
       return highlight(oldLine);
     }
     if (oldLine === newLine) return highlight(oldLine);
 
-    // Find common prefix length in raw text
     let prefixLen = 0;
     const minLen = Math.min(oldLine.length, newLine.length);
     while (prefixLen < minLen && oldLine[prefixLen] === newLine[prefixLen]) {
       prefixLen++;
     }
 
-    // Find common suffix length
     let suffixLen = 0;
     while (
       suffixLen < minLen - prefixLen &&
@@ -298,13 +244,9 @@
     return renderHighlightedLine(oldLine, prefixLen, oldLine.length - (suffixLen || 0), 'diff-del-inline');
   }
 
-  /**
-   * Render the new line with syntax highlighting and insertions marked.
-   */
   function renderNewLine(oldLine, newLine) {
     if (newLine === undefined) return '';
     if (oldLine === undefined) {
-      // Pure addition, highlight whole line
       return highlight(newLine);
     }
     if (oldLine === newLine) return highlight(oldLine);
@@ -330,121 +272,279 @@
 <div class="rounded-lg overflow-hidden border border-ctp-surface0 mb-2"
   style="background:color-mix(in srgb, #65b73b 8%, #ffffff)">
   <!-- Header -->
-  <button
-    class="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs cursor-pointer"
-    onclick={toggle}
-  >
-    <span class="flex items-center">
-      {#if collapsed}
-        <ChevronRight size={12} />
-      {:else}
-        <ChevronDown size={12} />
-      {/if}
-    </span>
-    <FilePenLine size={14} class="text-[#65b73b]" />
-    <span class="font-semibold" style="color:#65b73b">edit</span>
+  <div class="flex items-center gap-1 px-2.5 py-1.5 text-xs">
+    <button
+      class="flex items-center gap-1 cursor-pointer rounded px-1 py-0.5 hover:bg-black/5"
+      onclick={toggle}
+    >
+      <span class="flex items-center">
+        {#if collapsed}
+          <ChevronRight size={12} />
+        {:else}
+          <ChevronDown size={12} />
+        {/if}
+      </span>
+      <FilePenLine size={14} class="text-[#65b73b]" />
+      <span class="font-semibold" style="color:#65b73b">edit</span>
+    </button>
     <span class="text-ctp-overlay0 text-[10px] ml-auto truncate max-w-[300px]" title={filePath}>
       {(filePath ?? '').split('/').slice(-2).join('/')}
     </span>
-  </button>
+    <!-- View mode toggle -->
+    <button
+      class="cursor-pointer rounded px-1 py-0.5 hover:bg-black/10 ml-1"
+      onclick={cycleViewMode}
+      title={viewMode === 'side-by-side' ? 'Switch to unified view' : 'Switch to side-by-side view'}
+    >
+      {#if viewMode === 'side-by-side'}
+        <Columns size={12} class="text-ctp-overlay0" />
+      {:else}
+        <PanelLeft size={12} class="text-ctp-overlay0" />
+      {/if}
+    </button>
+  </div>
 
   <!-- Diff content -->
   <div class="border-t border-ctp-surface0" class:hidden={collapsed}>
-    <div class="text-[11px] font-mono overflow-x-auto" style="background:color-mix(in srgb, #ffffff 50%, #ffffff);">
-      {#each (edits ?? []) as edit, ei}
-        {#if ei > 0}
-          <div class="border-t border-ctp-surface0/50"></div>
-        {/if}
-        <div class="diff-block">
-          {#each computeDiff(edit.oldText, edit.newText) as segment}
-            {#if segment.type === 'ellipsis'}
-              <div class="px-3 py-0.5 text-ctp-overlay0 italic text-[10px] select-none">
-                … {segment.count} unchanged lines …
+    {#if viewMode === 'side-by-side'}
+      <!-- Side-by-side view -->
+      <div class="text-[11px] font-mono overflow-x-auto">
+        {#each (edits ?? []) as edit, ei}
+          {#if ei > 0}
+            <div class="border-t border-ctp-surface0/50"></div>
+          {/if}
+          <div class="diff-side-by-side">
+            <div class="diff-panel diff-panel-old">
+              <div class="diff-panel-header">
+                <span class="text-[10px] font-semibold text-ctp-overlay0/80 uppercase tracking-wide">Old</span>
               </div>
-            {:else if segment.type === 'changed'}
-              {#each segment.pairs as pair}
-                {#if pair.oldText !== undefined && pair.newText !== undefined}
-                  <div class="diff-line diff-line-removed flex leading-normal">
-                    <span class="diff-line-num w-10 text-right pr-2 shrink-0 text-ctp-overlay0/60 select-none"
-                      style="background:color-mix(in srgb, #e95f59 12%, #ffffff)">
-                      {pair.oldLine}
-                    </span>
-                    <span class="w-5 shrink-0 select-none"
-                      style="background:color-mix(in srgb, #e95f59 12%, #ffffff); color:#e95f59">-</span>
-                    <span class="flex-1 pr-3 whitespace-pre"
-                      style="background:color-mix(in srgb, #e95f59 12%, #ffffff)">
-                      {@html renderOldLine(pair.oldText, pair.newText)}
-                    </span>
-                  </div>
-                  <div class="diff-line diff-line-added flex leading-normal">
-                    <span class="diff-line-num w-10 text-right pr-2 shrink-0 text-ctp-overlay0/60 select-none"
-                      style="background:color-mix(in srgb, #65b73b 12%, #ffffff)">
-                      {pair.newLine}
-                    </span>
-                    <span class="w-5 shrink-0 select-none"
-                      style="background:color-mix(in srgb, #65b73b 12%, #ffffff); color:#65b73b">+</span>
-                    <span class="flex-1 pr-3 whitespace-pre"
-                      style="background:color-mix(in srgb, #65b73b 12%, #ffffff)">
-                      {@html renderNewLine(pair.oldText, pair.newText)}
-                    </span>
-                  </div>
-                {:else if pair.oldText !== undefined}
-                  <div class="diff-line diff-line-removed flex leading-normal">
-                    <span class="diff-line-num w-10 text-right pr-2 shrink-0 text-ctp-overlay0/60 select-none"
-                      style="background:color-mix(in srgb, #e95f59 12%, #ffffff)">
-                      {pair.oldLine}
-                    </span>
-                    <span class="w-5 shrink-0 select-none"
-                      style="background:color-mix(in srgb, #e95f59 12%, #ffffff); color:#e95f59">-</span>
-                    <span class="flex-1 pr-3 whitespace-pre"
-                      style="background:color-mix(in srgb, #e95f59 12%, #ffffff)">
-                      {@html highlight(pair.oldText)}
-                    </span>
-                  </div>
-                {:else}
-                  <div class="diff-line diff-line-added flex leading-normal">
-                    <span class="diff-line-num w-10 text-right pr-2 shrink-0 text-ctp-overlay0/60 select-none"
-                      style="background:color-mix(in srgb, #65b73b 12%, #ffffff)">
-                      {pair.newLine}
-                    </span>
-                    <span class="w-5 shrink-0 select-none"
-                      style="background:color-mix(in srgb, #65b73b 12%, #ffffff); color:#65b73b">+</span>
-                    <span class="flex-1 pr-3 whitespace-pre"
-                      style="background:color-mix(in srgb, #65b73b 12%, #ffffff)">
-                      {@html highlight(pair.newText)}
-                    </span>
-                  </div>
-                {/if}
-              {/each}
-            {:else if segment.type === 'context'}
-              <div class="diff-line diff-line-context flex leading-normal">
-                <span class="diff-line-num w-10 text-right pr-2 shrink-0 text-ctp-overlay0/60 select-none"
-                  style="background:color-mix(in srgb, #ffffff 50%, #ffffff)">
-                  {segment.oldLine}
-                </span>
-                <span class="w-5 shrink-0 select-none"
-                  style="background:color-mix(in srgb, #ffffff 50%, #ffffff); color:#777777"> </span>
-                <span class="flex-1 pr-3 whitespace-pre"
-                  style="background:color-mix(in srgb, #ffffff 50%, #ffffff)">
-                  {@html highlight(segment.text)}
-                </span>
+              <div class="diff-panel-content">
+                {#each computeDiff(edit.oldText, edit.newText) as segment}
+                  {#if segment.type === 'ellipsis'}
+                    <div class="diff-side-line px-2 py-0.5 text-ctp-overlay0 italic text-[10px] select-none">
+                      … {segment.count} lines …
+                    </div>
+                  {:else if segment.type === 'changed'}
+                    {#each segment.pairs as pair}
+                      {#if pair.oldText !== undefined}
+                        <div class="diff-side-line diff-line-removed flex leading-normal">
+                          <span class="diff-line-num w-8 text-right pr-1.5 shrink-0 text-ctp-overlay0/60 select-none">
+                            {pair.oldLine}
+                          </span>
+                          <span class="w-4 shrink-0 select-none text-[#e95f59]">-</span>
+                          <span class="flex-1 pr-2 whitespace-pre">
+                            {@html renderOldLine(pair.oldText, pair.newText)}
+                          </span>
+                        </div>
+                      {:else}
+                        <!-- No old counterpart — blank filler -->
+                        <div class="diff-side-line diff-line-empty flex leading-normal">
+                          <span class="diff-line-num w-8 text-right pr-1.5 shrink-0 select-none text-ctp-overlay0/30">
+                            ·
+                          </span>
+                          <span class="w-4 shrink-0 select-none"> </span>
+                          <span class="flex-1 pr-2 whitespace-pre text-ctp-overlay0/20">
+                            
+                          </span>
+                        </div>
+                      {/if}
+                    {/each}
+                  {:else if segment.type === 'context'}
+                    <div class="diff-side-line diff-line-context flex leading-normal">
+                      <span class="diff-line-num w-8 text-right pr-1.5 shrink-0 text-ctp-overlay0/60 select-none">
+                        {segment.oldLine}
+                      </span>
+                      <span class="w-4 shrink-0 select-none text-ctp-overlay0/30"> </span>
+                      <span class="flex-1 pr-2 whitespace-pre">
+                        {@html highlight(segment.text)}
+                      </span>
+                    </div>
+                  {/if}
+                {/each}
               </div>
-            {/if}
-          {/each}
-        </div>
-      {/each}
-    </div>
+            </div>
+            <div class="diff-divider"></div>
+            <div class="diff-panel diff-panel-new">
+              <div class="diff-panel-header">
+                <span class="text-[10px] font-semibold text-ctp-overlay0/80 uppercase tracking-wide">New</span>
+              </div>
+              <div class="diff-panel-content">
+                {#each computeDiff(edit.oldText, edit.newText) as segment}
+                  {#if segment.type === 'ellipsis'}
+                    <div class="diff-side-line px-2 py-0.5 text-ctp-overlay0 italic text-[10px] select-none">
+                      … {segment.count} lines …
+                    </div>
+                  {:else if segment.type === 'changed'}
+                    {#each segment.pairs as pair}
+                      {#if pair.newText !== undefined}
+                        <div class="diff-side-line diff-line-added flex leading-normal">
+                          <span class="diff-line-num w-8 text-right pr-1.5 shrink-0 text-ctp-overlay0/60 select-none">
+                            {pair.newLine}
+                          </span>
+                          <span class="w-4 shrink-0 select-none text-[#65b73b]">+</span>
+                          <span class="flex-1 pr-2 whitespace-pre">
+                            {@html renderNewLine(pair.oldText, pair.newText)}
+                          </span>
+                        </div>
+                      {:else}
+                        <!-- No new counterpart — blank filler -->
+                        <div class="diff-side-line diff-line-empty flex leading-normal">
+                          <span class="diff-line-num w-8 text-right pr-1.5 shrink-0 select-none text-ctp-overlay0/30">
+                            ·
+                          </span>
+                          <span class="w-4 shrink-0 select-none"> </span>
+                          <span class="flex-1 pr-2 whitespace-pre text-ctp-overlay0/20">
+                            
+                          </span>
+                        </div>
+                      {/if}
+                    {/each}
+                  {:else if segment.type === 'context'}
+                    <div class="diff-side-line diff-line-context flex leading-normal">
+                      <span class="diff-line-num w-8 text-right pr-1.5 shrink-0 text-ctp-overlay0/60 select-none">
+                        {segment.newLine}
+                      </span>
+                      <span class="w-4 shrink-0 select-none text-ctp-overlay0/30"> </span>
+                      <span class="flex-1 pr-2 whitespace-pre">
+                        {@html highlight(segment.text)}
+                      </span>
+                    </div>
+                  {/if}
+                {/each}
+              </div>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <!-- Unified view (original) -->
+      <div class="text-[11px] font-mono overflow-x-auto" style="background:color-mix(in srgb, #ffffff 50%, #ffffff);">
+        {#each (edits ?? []) as edit, ei}
+          {#if ei > 0}
+            <div class="border-t border-ctp-surface0/50"></div>
+          {/if}
+          <div class="diff-block">
+            {#each computeDiff(edit.oldText, edit.newText) as segment}
+              {#if segment.type === 'ellipsis'}
+                <div class="px-3 py-0.5 text-ctp-overlay0 italic text-[10px] select-none">
+                  … {segment.count} unchanged lines …
+                </div>
+              {:else if segment.type === 'changed'}
+                {#each segment.pairs as pair}
+                  {#if pair.oldText !== undefined && pair.newText !== undefined}
+                    <div class="diff-line diff-line-removed flex leading-normal">
+                      <span class="diff-line-num w-10 text-right pr-2 shrink-0 text-ctp-overlay0/60 select-none">
+                        {pair.oldLine}
+                      </span>
+                      <span class="w-5 shrink-0 select-none text-[#e95f59]">-</span>
+                      <span class="flex-1 pr-3 whitespace-pre">
+                        {@html renderOldLine(pair.oldText, pair.newText)}
+                      </span>
+                    </div>
+                    <div class="diff-line diff-line-added flex leading-normal">
+                      <span class="diff-line-num w-10 text-right pr-2 shrink-0 text-ctp-overlay0/60 select-none">
+                        {pair.newLine}
+                      </span>
+                      <span class="w-5 shrink-0 select-none text-[#65b73b]">+</span>
+                      <span class="flex-1 pr-3 whitespace-pre">
+                        {@html renderNewLine(pair.oldText, pair.newText)}
+                      </span>
+                    </div>
+                  {:else if pair.oldText !== undefined}
+                    <div class="diff-line diff-line-removed flex leading-normal">
+                      <span class="diff-line-num w-10 text-right pr-2 shrink-0 text-ctp-overlay0/60 select-none">
+                        {pair.oldLine}
+                      </span>
+                      <span class="w-5 shrink-0 select-none text-[#e95f59]">-</span>
+                      <span class="flex-1 pr-3 whitespace-pre">
+                        {@html highlight(pair.oldText)}
+                      </span>
+                    </div>
+                  {:else}
+                    <div class="diff-line diff-line-added flex leading-normal">
+                      <span class="diff-line-num w-10 text-right pr-2 shrink-0 text-ctp-overlay0/60 select-none">
+                        {pair.newLine}
+                      </span>
+                      <span class="w-5 shrink-0 select-none text-[#65b73b]">+</span>
+                      <span class="flex-1 pr-3 whitespace-pre">
+                        {@html highlight(pair.newText)}
+                      </span>
+                    </div>
+                  {/if}
+                {/each}
+              {:else if segment.type === 'context'}
+                <div class="diff-line diff-line-context flex leading-normal">
+                  <span class="diff-line-num w-10 text-right pr-2 shrink-0 text-ctp-overlay0/60 select-none">
+                    {segment.oldLine}
+                  </span>
+                  <span class="w-5 shrink-0 select-none text-ctp-overlay0/40"> </span>
+                  <span class="flex-1 pr-3 whitespace-pre">
+                    {@html highlight(segment.text)}
+                  </span>
+                </div>
+              {/if}
+            {/each}
+          </div>
+        {/each}
+      </div>
+    {/if}
   </div>
 </div>
 
 <style>
-  .diff-del,
   .diff-del-inline {
     background: color-mix(in srgb, #e95f59 25%, transparent);
     text-decoration: none;
   }
-  .diff-ins,
   .diff-ins-inline {
     background: color-mix(in srgb, #65b73b 25%, transparent);
+  }
+
+  /* Side-by-side layout */
+  .diff-side-by-side {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    background: color-mix(in srgb, #ffffff 50%, #ffffff);
+  }
+
+  .diff-panel {
+    min-width: 0;
+  }
+
+  .diff-panel-header {
+    padding: 4px 8px 2px;
+    border-bottom: 1px solid color-mix(in srgb, #000 8%, transparent);
+    font-size: 10px;
+  }
+
+  .diff-panel-content {
+    overflow-x: auto;
+  }
+
+  .diff-divider {
+    width: 1px;
+    background: color-mix(in srgb, #000 10%, transparent);
+    align-self: stretch;
+  }
+
+  .diff-side-line {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .diff-line-removed {
+    background: color-mix(in srgb, #e95f59 12%, transparent);
+  }
+
+  .diff-line-added {
+    background: color-mix(in srgb, #65b73b 12%, transparent);
+  }
+
+  .diff-line-context {
+    background: transparent;
+  }
+
+  .diff-line-empty {
+    background: color-mix(in srgb, #000 3%, transparent);
   }
 </style>
