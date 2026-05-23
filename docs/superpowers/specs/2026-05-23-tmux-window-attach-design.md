@@ -40,7 +40,7 @@ tmux list-windows -t <session> -F "#{window_index}|#{window_name}|#{window_activ
   - `capturePane()` → `tmux capture-pane -p -e -t <session>:<windowIndex>`
   - `SendKeys()` → `tmux send-keys -t <session>:<windowIndex> -l -- <text>`
   - `SendKey()` → `tmux send-keys -t <session>:<windowIndex> <key>`
-  - `Resize()` → `tmux resize-pane -t <session>:<windowIndex> -x <cols> -y <rows>` (targets active pane within that window)
+- `Resize()` is **not** called for window-attached sessions. The terminal modal preserves the tmux pane's native dimensions and scrolls if content exceeds the viewport. Client-side `resize` events from xterm.js are ignored (no `tmux resize-pane` calls).
 
 ### `internal/server/server.go`
 
@@ -72,6 +72,7 @@ tmux list-windows -t <session> -F "#{window_index}|#{window_name}|#{window_activ
 - Opens WS to `/ws/tmux/:session?window=N` (query param, no route change)
 - Modal title shows `session:window` for multi-window, `session` for single-window
 - If no window specified, connects to the session (existing behavior)
+- Does **not** send `resize` events over the WebSocket. The modal preserves the tmux pane's native size and scrolls if the viewport is smaller than the terminal content. xterm.js `resize` event listener is not attached.
 
 ### `App.svelte` updates
 - Mount `TmuxWindowPicker` alongside existing components
@@ -83,4 +84,4 @@ tmux list-windows -t <session> -F "#{window_index}|#{window_name}|#{window_activ
 
 ## Scope
 - **In scope:** listing windows, attaching to a specific window via the picker
-- **Out of scope:** pane-level selection, switching windows within the terminal modal, renaming windows from the UI, creating new windows
+- **Out of scope:** pane-level selection, switching windows within the terminal modal, renaming windows from the UI, creating new windows, resizing the tmux pane from the modal (modal scrolls instead)
