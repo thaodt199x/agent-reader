@@ -110,6 +110,7 @@
       sessionName = target.session;
       windowIndex = target.window !== undefined ? target.window : null;
       reconnectAttempt = 0;
+      disconnect(); // clean up previous connection before connecting to new target
 
       if (!terminal) {
         terminal = new Terminal({
@@ -164,6 +165,15 @@
       }
 
       connect();
+
+      return () => {
+        disconnect();
+        if (terminal) {
+          terminal.dispose();
+          terminal = null;
+          fitAddon = null;
+        }
+      };
     } else {
       closeTerminal();
     }
