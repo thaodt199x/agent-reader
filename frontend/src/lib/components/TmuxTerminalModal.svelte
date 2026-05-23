@@ -1,4 +1,5 @@
 <script>
+  import { untrack } from 'svelte';
   import { tmuxTerminalTarget } from '$lib/stores/tmux.svelte.js';
   import { X, AlertTriangle } from '@lucide/svelte';
   import { Terminal } from 'xterm';
@@ -7,14 +8,17 @@
 
   let terminalRef;
 
-  let terminal = $state(null);
-  let fitAddon = $state(null);
-  let ws = $state(null);
+  // Svelte reactive state for UI rendering
   let status = $state('disconnected');
   let sessionName = $state('');
   let windowIndex = $state(null);
-  let reconnectAttempt = $state(0);
-  let reconnectTimer = $state(null);
+
+  // Non-reactive variables (no need for Svelte $state proxy)
+  let terminal = null;
+  let fitAddon = null;
+  let ws = null;
+  let reconnectAttempt = 0;
+  let reconnectTimer = null;
 
   function computeBackoff() {
     const delay = Math.min(1000 * Math.pow(2, reconnectAttempt), 16000);
@@ -106,81 +110,85 @@
 
   $effect(() => {
     const target = $tmuxTerminalTarget;
-    if (target) {
-      sessionName = target.session;
-      windowIndex = target.window !== undefined ? target.window : null;
-      reconnectAttempt = 0;
-      disconnect(); // clean up previous connection before connecting to new target
+    untrack(() => {
+      if (target) {
+        sessionName = target.session;
+        windowIndex = target.window !== undefined ? target.window : null;
+        reconnectAttempt = 0;
+        disconnect();
 
-      if (!terminal) {
-        terminal = new Terminal({
-          cursorBlink: true,
-          fontSize: 13,
-          fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", Menlo, monospace',
-          theme: {
-            background: '#1e1e2e',
-            foreground: '#cdd6f4',
-            cursor: '#f5e0dc',
-            selectionBackground: '#585b7066',
-            black: '#45475a',
-            red: '#f38ba8',
-            green: '#a6e3a1',
-            yellow: '#f9e2af',
-            blue: '#89b4fa',
-            magenta: '#f5c2e7',
-            cyan: '#94e2d5',
-            white: '#bac2de',
-            brightBlack: '#585b70',
-            brightRed: '#f38ba8',
-            brightGreen: '#a6e3a1',
-            brightYellow: '#f9e2af',
-            brightBlue: '#89b4fa',
-            brightMagenta: '#f5c2e7',
-            brightCyan: '#94e2d5',
-            brightWhite: '#a6adc8',
-          },
-        });
+        if (!terminal) {
+          terminal = new Terminal({
+            cursorBlink: true,
+            convertEol: true,
+            fontSize: 13,
+            fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", Menlo, monospace',
+            theme: {
+              background: '#1e1e2e',
+              foreground: '#cdd6f4',
+              cursor: '#f5e0dc',
+              selectionBackground: '#585b7066',
+              black: '#45475a',
+              red: '#f38ba8',
+              green: '#a6e3a1',
+              yellow: '#f9e2af',
+              blue: '#89b4fa',
+              magenta: '#f5c2e7',
+              cyan: '#94e2d5',
+              white: '#bac2de',
+              brightBlack: '#585b70',
+              brightRed: '#f38ba8',
+              brightGreen: '#a6e3a1',
+              brightYellow: '#f9e2af',
+              brightBlue: '#89b4fa',
+              brightMagenta: '#f5c2e7',
+              brightCyan: '#94e2d5',
+              brightWhite: '#a6adc8',
+            },
+          });
 
-        fitAddon = new FitAddon();
-        terminal.loadAddon(fitAddon);
-        terminal.open(terminalRef);
+          fitAddon = new FitAddon();
+          terminal.loadAddon(fitAddon);
+          terminal.open(terminalRef);
 
-        terminal.onData((data) => {
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'data', content: data }));
-          }
-        });
-
-        if (windowIndex === null) {
-          terminal.onResize(({ cols, rows }) => {
+          terminal.onData((data) => {
             if (ws && ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+              ws.send(JSON.stringify({ type: 'data', content: data }));
             }
           });
+
+          if (windowIndex === null) {
+            terminal.onResize(({ cols, rows }) => {
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+              }
+            });
+          }
 
           requestAnimationFrame(() => {
             if (fitAddon) fitAddon.fit();
           });
         }
+
+        connect();
+      } else {
+        closeTerminal();
       }
+    });
 
-      connect();
-
-      return () => {
+    return () => {
+      untrack(() => {
         disconnect();
         if (terminal) {
           terminal.dispose();
           terminal = null;
           fitAddon = null;
         }
-      };
-    } else {
-      closeTerminal();
-    }
+      });
+    };
   });
 
   $effect(() => {
-    if (windowIndex !== null) return;
     if (!fitAddon || !terminal) return;
     const observer = new ResizeObserver(() => {
       fitAddon.fit();
@@ -227,7 +235,7 @@
       </div>
 
       <!-- Terminal area -->
-      <div class="flex-1 relative bg-ctp-crust">
+      <div class="flex-1 relative bg-[#1e1e2e]">
         <div bind:this={terminalRef} class="absolute inset-0"></div>
 
         {#if status === 'ended'}

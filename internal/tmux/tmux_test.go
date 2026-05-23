@@ -18,8 +18,8 @@ func TestIsAvailable(t *testing.T) {
 func TestListSessions_Parsing(t *testing.T) {
 	t.Parallel()
 
-	input := `my-project|3|1|1779272400|0
-agent-work|1|2|1779266400|1
+	input := `my-project|3|1|1779272400|0|/Users/dt/code/my-project
+agent-work|1|2|1779266400|1|/Users/dt/code/agent-work
 `
 
 	var sessions []Session
@@ -29,9 +29,9 @@ agent-work|1|2|1779266400|1
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "|", 5)
-		if len(parts) != 5 {
-			t.Fatalf("expected 5 parts, got %d for line: %s", len(parts), line)
+		parts := strings.SplitN(line, "|", 6)
+		if len(parts) != 6 {
+			t.Fatalf("expected 6 parts, got %d for line: %s", len(parts), line)
 		}
 
 		createdUnix, err := strconv.ParseInt(parts[3], 10, 64)
@@ -49,6 +49,7 @@ agent-work|1|2|1779266400|1
 			Panes:    panes,
 			Created:  created,
 			Attached: parts[4] == "1",
+			Path:     parts[5],
 		})
 	}
 
@@ -72,6 +73,9 @@ agent-work|1|2|1779266400|1
 	if sessions[0].Attached {
 		t.Error("expected session 0 attached to be false")
 	}
+	if sessions[0].Path != "/Users/dt/code/my-project" {
+		t.Errorf("expected session 0 path '/Users/dt/code/my-project', got %q", sessions[0].Path)
+	}
 
 	expected := time.Unix(1779272400, 0)
 	if !sessions[0].Created.Equal(expected) {
@@ -83,6 +87,9 @@ agent-work|1|2|1779266400|1
 	}
 	if !sessions[1].Attached {
 		t.Error("expected session 1 attached to be true")
+	}
+	if sessions[1].Path != "/Users/dt/code/agent-work" {
+		t.Errorf("expected session 1 path '/Users/dt/code/agent-work', got %q", sessions[1].Path)
 	}
 }
 
@@ -115,9 +122,9 @@ func TestStopWithoutStart_NonEmptyPanic(t *testing.T) {
 func TestListWindows_Parsing(t *testing.T) {
 	t.Parallel()
 
-	input := `0|bash|1|1
-1|nvim|0|1
-2||0|2
+	input := `0|bash|1|1|/Users/dt/code/my-project
+1|nvim|0|1|/Users/dt/code/my-project/src
+2||0|2|/Users/dt/code/my-project/tests
 `
 
 	var windows []Window
@@ -127,9 +134,9 @@ func TestListWindows_Parsing(t *testing.T) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "|", 4)
-		if len(parts) != 4 {
-			t.Fatalf("expected 4 parts, got %d for line: %s", len(parts), line)
+		parts := strings.SplitN(line, "|", 5)
+		if len(parts) != 5 {
+			t.Fatalf("expected 5 parts, got %d for line: %s", len(parts), line)
 		}
 
 		index, _ := strconv.Atoi(parts[0])
@@ -140,6 +147,7 @@ func TestListWindows_Parsing(t *testing.T) {
 			Name:   parts[1],
 			Active: parts[2] == "1",
 			Panes:  panes,
+			Path:   parts[4],
 		})
 	}
 
@@ -151,13 +159,13 @@ func TestListWindows_Parsing(t *testing.T) {
 		t.Fatalf("expected 3 windows, got %d", len(windows))
 	}
 
-	if windows[0].Index != 0 || windows[0].Name != "bash" || !windows[0].Active {
+	if windows[0].Index != 0 || windows[0].Name != "bash" || !windows[0].Active || windows[0].Path != "/Users/dt/code/my-project" {
 		t.Errorf("window 0: %+v", windows[0])
 	}
-	if windows[1].Index != 1 || windows[1].Name != "nvim" || windows[1].Active {
+	if windows[1].Index != 1 || windows[1].Name != "nvim" || windows[1].Active || windows[1].Path != "/Users/dt/code/my-project/src" {
 		t.Errorf("window 1: %+v", windows[1])
 	}
-	if windows[2].Index != 2 || windows[2].Name != "" || windows[2].Active || windows[2].Panes != 2 {
+	if windows[2].Index != 2 || windows[2].Name != "" || windows[2].Active || windows[2].Panes != 2 || windows[2].Path != "/Users/dt/code/my-project/tests" {
 		t.Errorf("window 2: %+v", windows[2])
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -14,11 +15,14 @@ import (
 
 // Session represents a tmux session.
 type Session struct {
-	Name     string    `json:"name"`
-	Windows  int       `json:"windows"`
-	Panes    int       `json:"panes"`
-	Created  time.Time `json:"created"`
-	Attached bool      `json:"attached"`
+	Name       string    `json:"name"`
+	Windows    int       `json:"windows"`
+	Panes      int       `json:"panes"`
+	Created    time.Time `json:"created"`
+	Attached   bool      `json:"attached"`
+	Path       string    `json:"path"`
+	WindowList []Window  `json:"window_list"`
+	Related    bool      `json:"related"`
 }
 
 // Window represents a tmux window within a session.
@@ -27,6 +31,7 @@ type Window struct {
 	Name   string `json:"name"`   // may be empty
 	Active bool   `json:"active"`
 	Panes  int    `json:"panes"`
+	Path   string `json:"path"`
 }
 
 // ListWindows returns all windows in a tmux session.
@@ -34,7 +39,7 @@ func ListWindows(sessionName string) ([]Window, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "tmux", "list-windows", "-t", sessionName, "-F", "#{window_index}|#{window_name}|#{window_active}|#{window_panes}")
+	cmd := exec.CommandContext(ctx, "tmux", "list-windows", "-t", sessionName, "-F", "#{window_index}|#{window_name}|#{window_active}|#{window_panes}|#{pane_current_path}")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -47,8 +52,8 @@ func ListWindows(sessionName string) ([]Window, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "|", 4)
-		if len(parts) != 4 {
+		parts := strings.SplitN(line, "|", 5)
+		if len(parts) != 5 {
 			continue
 		}
 
@@ -60,6 +65,7 @@ func ListWindows(sessionName string) ([]Window, error) {
 			Name:   parts[1],
 			Active: parts[2] == "1",
 			Panes:  panes,
+			Path:   parts[4],
 		})
 	}
 
@@ -77,7 +83,7 @@ func ListSessions() ([]Session, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}|#{session_windows}|#{session_panes}|#{session_created}|#{session_attached}")
+	cmd := exec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}|#{session_windows}|#{session_panes}|#{session_created}|#{session_attached}|#{session_path}")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -90,8 +96,8 @@ func ListSessions() ([]Session, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "|", 5)
-		if len(parts) != 5 {
+		parts := strings.SplitN(line, "|", 6)
+		if len(parts) != 6 {
 			continue
 		}
 
@@ -108,24 +114,64 @@ func ListSessions() ([]Session, error) {
 			Panes:    panes,
 			Created:  created,
 			Attached: parts[4] == "1",
+			Path:     parts[5],
 		})
 	}
 
-	return sessions, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	// Populate windows for each session
+	for i := range sessions {
+		wins, err := ListWindows(sessions[i].Name)
+		if err == nil {
+			sessions[i].WindowList = wins
+		}
+	}
+
+	return sessions, nil
+}
+
+// SearchSessionContent captures the pane content of all windows in the session and checks if it contains the query.
+func SearchSessionContent(sessionName string, query string) bool {
+	if query == "" {
+		return false
+	}
+	windows, err := ListWindows(sessionName)
+	if err != nil {
+		return false
+	}
+	for _, win := range windows {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		target := fmt.Sprintf("%s:%d", sessionName, win.Index)
+		cmd := exec.CommandContext(ctx, "tmux", "capture-pane", "-p", "-t", target)
+		output, err := cmd.Output()
+		cancel()
+		if err == nil {
+			if strings.Contains(strings.ToLower(string(output)), strings.ToLower(query)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // SessionAttach manages live streaming to a tmux session's active pane.
 type SessionAttach struct {
-	sessionName string
-	windowIndex *int          // nil = active window, explicit = target specific window
-	stopOnce    sync.Once     // guards single close of stopCh
-	stopCh      chan struct{} // closed by Stop() to signal Start() to exit
-	doneCh      chan struct{} // closed when Start()'s goroutine exits
-	mu          sync.RWMutex
-	subscribers map[chan string]bool
-	lastContent string
-	started     atomic.Bool // true once Start() has begun running
+	sessionName  string
+	windowIndex  *int          // nil = active window, explicit = target specific window
+	stopOnce     sync.Once     // guards single close of stopCh
+	stopCh       chan struct{} // closed by Stop() to signal Start() to exit
+	doneCh       chan struct{} // closed when Start()'s goroutine exits
+	mu           sync.RWMutex
+	subscribers  map[chan string]bool
+	lastContent  string
+	started      atomic.Bool // true once Start() has begun running
+	consecErrors int         // consecutive capture failures
 }
+
+const maxConsecErrors = 5 // stop attacher after this many consecutive capture failures
 
 // target returns the tmux target string, including window index if set.
 func (a *SessionAttach) target() string {
@@ -160,13 +206,21 @@ func (a *SessionAttach) Start() {
 
 	// Prime lastContent; empty is OK — we keep polling.
 	a.mu.Lock()
-	a.lastContent = a.capturePane()
-	if a.lastContent != "" {
-		content := a.lastContent
+	content, err := a.capturePane()
+	if err != nil {
+		a.consecErrors++
 		a.mu.Unlock()
-		a.broadcast(content)
+		if a.consecErrors >= maxConsecErrors {
+			log.Printf("[tmux] capture failed %d times for %s, stopping: %v", maxConsecErrors, a.target(), err)
+			return
+		}
 	} else {
+		a.consecErrors = 0
+		a.lastContent = content
 		a.mu.Unlock()
+		if content != "" {
+			a.broadcast(content)
+		}
 	}
 
 	for {
@@ -174,12 +228,27 @@ func (a *SessionAttach) Start() {
 		case <-a.stopCh:
 			return
 		case <-ticker.C:
-			content := a.capturePane()
+			content, err := a.capturePane()
+			if err != nil {
+				a.mu.Lock()
+				a.consecErrors++
+				n := a.consecErrors
+				a.mu.Unlock()
+				if n >= maxConsecErrors {
+					log.Printf("[tmux] capture failed %d times for %s, stopping: %v", maxConsecErrors, a.target(), err)
+					return
+				}
+				continue
+			}
 			// Empty capture is transient, not fatal — keep polling.
 			if content == "" {
+				a.mu.Lock()
+				a.consecErrors = 0
+				a.mu.Unlock()
 				continue
 			}
 			a.mu.Lock()
+			a.consecErrors = 0
 			if content != a.lastContent {
 				a.lastContent = content
 				a.mu.Unlock()
@@ -216,6 +285,9 @@ func (a *SessionAttach) Subscribe() chan string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.subscribers[ch] = true
+	if a.lastContent != "" {
+		ch <- a.lastContent
+	}
 	return ch
 }
 
@@ -262,16 +334,16 @@ func (a *SessionAttach) Done() <-chan struct{} {
 }
 
 // capturePane captures the current pane content.
-func (a *SessionAttach) capturePane() string {
+func (a *SessionAttach) capturePane() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "tmux", "capture-pane", "-p", "-e", "-t", a.target())
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("capture-pane: %w: %s", err, string(output))
 	}
-	return string(output)
+	return string(output), nil
 }
 
 // broadcast sends content to all subscriber channels non-blocking.

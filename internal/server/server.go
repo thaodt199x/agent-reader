@@ -1500,6 +1500,21 @@ func (s *Server) onSubscribe(sessionID string, client *hub.Client) {
 
 // ===== tmux API =====
 
+func pathMatches(projectDir, path string) bool {
+	if projectDir == "" || path == "" {
+		return false
+	}
+	p1 := strings.TrimSuffix(path, "/")
+	p2 := strings.TrimSuffix(projectDir, "/")
+	if p1 == p2 {
+		return true
+	}
+	if strings.HasPrefix(p1, p2+"/") || strings.HasPrefix(p2, p1+"/") {
+		return true
+	}
+	return false
+}
+
 func (s *Server) handleTmuxSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1515,6 +1530,10 @@ func (s *Server) handleTmuxSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sessionID := r.URL.Query().Get("session_id")
+	project := r.URL.Query().Get("project")
+	cwd := r.URL.Query().Get("cwd")
+
 	sessions, err := tmux.ListSessions()
 	if err != nil {
 		if strings.Contains(err.Error(), "no server") {
@@ -1528,6 +1547,70 @@ func (s *Server) handleTmuxSessions(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[server] tmux list sessions error: %v", err)
 		http.Error(w, fmt.Sprintf("tmux error: %v", err), http.StatusInternalServerError)
 		return
+	}
+
+	for i := range sessions {
+		sessions[i].Related = false
+
+		if sessionID == "" && project == "" && cwd == "" {
+			continue
+		}
+
+		// 1. Check path matches
+		if cwd != "" {
+			if pathMatches(cwd, sessions[i].Path) {
+				sessions[i].Related = true
+				continue
+			}
+			matchedPath := false
+			for _, win := range sessions[i].WindowList {
+				if pathMatches(cwd, win.Path) {
+					matchedPath = true
+					break
+				}
+			}
+			if matchedPath {
+				sessions[i].Related = true
+				continue
+			}
+		}
+
+		// 2. Check name matches (session name or window names contain sessionID or project)
+		nameMatched := false
+		lowerName := strings.ToLower(sessions[i].Name)
+		if sessionID != "" && strings.Contains(lowerName, strings.ToLower(sessionID)) {
+			nameMatched = true
+		}
+		if project != "" && strings.Contains(lowerName, strings.ToLower(project)) {
+			nameMatched = true
+		}
+
+		for _, win := range sessions[i].WindowList {
+			lowerWinName := strings.ToLower(win.Name)
+			if sessionID != "" && strings.Contains(lowerWinName, strings.ToLower(sessionID)) {
+				nameMatched = true
+				break
+			}
+			if project != "" && strings.Contains(lowerWinName, strings.ToLower(project)) {
+				nameMatched = true
+				break
+			}
+		}
+
+		if nameMatched {
+			sessions[i].Related = true
+			continue
+		}
+
+		// 3. Search terminal pane content for sessionID or project name
+		if sessionID != "" && tmux.SearchSessionContent(sessions[i].Name, sessionID) {
+			sessions[i].Related = true
+			continue
+		}
+		if project != "" && tmux.SearchSessionContent(sessions[i].Name, project) {
+			sessions[i].Related = true
+			continue
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1619,12 +1702,16 @@ func (s *Server) handleTmuxWS(w http.ResponseWriter, r *http.Request) {
 
 	subCh := attach.Subscribe()
 
-	// Helper to send JSON
+	// Serialize all WebSocket writes to prevent concurrent write corruption.
+	var writeMu sync.Mutex
 	sendJSON := func(v interface{}) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
 		return conn.WriteJSON(v)
 	}
 
-	// Goroutine: read from subscription channel and forward to WebSocket
+	// Goroutine: read from subscription channel and forward to WebSocket.
+	// When subCh closes (attacher stopped), it sends session_end then signals done.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -1636,15 +1723,16 @@ func (s *Server) handleTmuxWS(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		// Channel closed — session ended or attacher stopped
-		sendJSON(map[string]interface{}{
-			"type": "session_end",
-		})
+		// Attacher stopped — tmux session died.
+		writeMu.Lock()
+		conn.WriteJSON(map[string]interface{}{"type": "session_end"})
+		writeMu.Unlock()
 	}()
 
 	// Main loop: read WebSocket messages and forward to tmux
 	defer func() {
 		attach.Unsubscribe(subCh)
+		<-done // wait for goroutine to finish sending session_end
 		conn.Close()
 		if windowIndex >= 0 {
 			log.Printf("[server] tmux ws: detached from session %q window %d", sessionName, windowIndex)

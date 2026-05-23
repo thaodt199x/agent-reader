@@ -1,6 +1,8 @@
 <script>
   import { tmuxSessionPickerOpen, tmuxTerminalTarget, tmuxWindowPickerOpen } from '$lib/stores/tmux.svelte.js';
   import { fetchTmuxSessions } from '$lib/api/tmux.js';
+  import { activeSession, sessions as appSessions } from '$lib/stores/session.svelte.js';
+  import { findSession } from '$lib/utils/sessionCapabilities.js';
   import { Terminal, X, RefreshCw, ArrowRight } from '@lucide/svelte';
 
   let sessions = $state([]);
@@ -8,11 +10,58 @@
   let error = $state('');
   let available = $state(true);
 
+  let activeSessionInfo = $derived(findSession($appSessions, $activeSession));
+  let projectDir = $derived(activeSessionInfo?.cwd || '');
+
+  function pathContains(projectDir, path) {
+    if (!path || !projectDir) return false;
+    const p1 = path.replace(/\/$/, '');
+    const p2 = projectDir.replace(/\/$/, '');
+    return p1 === p2 || p1.startsWith(p2 + '/');
+  }
+
+  function sessionMatches(session, projectDir, activeSessionInfo) {
+    if (session.related) return true;
+
+    if (activeSessionInfo) {
+      const sessionId = activeSessionInfo.id;
+      const projectName = activeSessionInfo.project;
+
+      if (sessionId) {
+        if (session.name.toLowerCase().includes(sessionId.toLowerCase())) return true;
+        if (session.window_list && session.window_list.some(win => win.name && win.name.toLowerCase().includes(sessionId.toLowerCase()))) return true;
+      }
+
+      if (projectName) {
+        if (session.name.toLowerCase().includes(projectName.toLowerCase())) return true;
+        if (session.window_list && session.window_list.some(win => win.name && win.name.toLowerCase().includes(projectName.toLowerCase()))) return true;
+      }
+    }
+
+    if (!projectDir) return true;
+    if (pathContains(projectDir, session.path)) return true;
+    if (session.window_list && session.window_list.length > 0) {
+      return session.window_list.some(win => pathContains(projectDir, win.path));
+    }
+    const p1 = session.path.replace(/\/$/, '');
+    const p2 = projectDir.replace(/\/$/, '');
+    return p2.startsWith(p1 + '/');
+  }
+
+  let filteredSessions = $derived.by(() => {
+    if (!activeSessionInfo) return sessions;
+    return sessions.filter(session => sessionMatches(session, projectDir, activeSessionInfo));
+  });
+
   async function loadSessions() {
     loading = true;
     error = '';
     try {
-      const data = await fetchTmuxSessions();
+      const data = await fetchTmuxSessions(
+        activeSessionInfo?.id || '',
+        activeSessionInfo?.project || '',
+        activeSessionInfo?.cwd || ''
+      );
       available = data.available;
       sessions = data.sessions || [];
     } catch (e) {
@@ -83,13 +132,13 @@
                style="background:color-mix(in srgb, #e95f59 10%, #ffffff)">
             <span>{error}</span>
           </div>
-        {:else if sessions.length === 0}
+        {:else if filteredSessions.length === 0}
           <div class="text-center py-8 text-ctp-overlay0 text-sm">
-            No tmux sessions found
+            No matching tmux sessions found
           </div>
         {:else}
           <div class="space-y-2">
-            {#each sessions as session (session.name)}
+            {#each filteredSessions as session (session.name)}
               <div class="flex items-center justify-between px-4 py-3 bg-ctp-crust border border-ctp-surface0 rounded-lg">
                 <div class="flex items-center gap-3">
                   <span class="w-[8px] h-[8px] rounded-full flex-shrink-0 {session.attached ? 'bg-ctp-green' : 'bg-ctp-overlay0'}"></span>
@@ -115,7 +164,7 @@
 
       <!-- Footer -->
       <div class="px-6 py-3 border-t border-ctp-surface0 flex justify-between items-center">
-        <span class="text-[11px] text-ctp-overlay0">{sessions.length} session{sessions.length !== 1 ? 's' : ''}</span>
+        <span class="text-[11px] text-ctp-overlay0">{filteredSessions.length} session{filteredSessions.length !== 1 ? 's' : ''}</span>
         <button
           class="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium text-ctp-overlay0 hover:text-ctp-text hover:bg-ctp-surface0 transition-colors cursor-pointer"
           onclick={loadSessions}

@@ -93,3 +93,27 @@ func writeTempSession(t *testing.T, lines ...string) string {
 func longCodexUserMessage(prefix string, n int) string {
 	return `{"timestamp":"2026-05-19T02:39:56.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"` + prefix + strings.Repeat("x", n) + `"}]}}`
 }
+
+func TestPathMatches(t *testing.T) {
+	tests := []struct {
+		projectDir string
+		path       string
+		expected   bool
+	}{
+		{"/a/b", "/a/b", true},
+		{"/a/b/", "/a/b", true},
+		{"/a/b", "/a/b/", true},
+		{"/a/b", "/a/b/c", true},
+		{"/a/b/c", "/a/b", true},
+		{"/a/b", "/a/bc", false},
+		{"/a/bc", "/a/b", false},
+		{"", "/a/b", false},
+		{"/a/b", "", false},
+	}
+	for _, tt := range tests {
+		got := pathMatches(tt.projectDir, tt.path)
+		if got != tt.expected {
+			t.Errorf("pathMatches(%q, %q) = %v; want %v", tt.projectDir, tt.path, got, tt.expected)
+		}
+	}
+}
