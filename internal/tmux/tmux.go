@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -71,11 +72,13 @@ func ListSessions() ([]Session, error) {
 // SessionAttach manages live streaming to a tmux session's active pane.
 type SessionAttach struct {
 	sessionName string
-	stopCh      chan struct{}
-	doneCh      chan struct{}
+	stopOnce    sync.Once     // guards single close of stopCh
+	stopCh      chan struct{} // closed by Stop() to signal Start() to exit
+	doneCh      chan struct{} // closed when Start()'s goroutine exits
 	mu          sync.RWMutex
 	subscribers map[chan string]bool
 	lastContent string
+	started     atomic.Bool // true once Start() has begun running
 }
 
 // NewAttach creates a new SessionAttach for the given session.
@@ -91,14 +94,21 @@ func NewAttach(sessionName string) *SessionAttach {
 // Start begins the polling loop and blocks until Stop is called or the session dies.
 func (a *SessionAttach) Start() {
 	defer close(a.doneCh)
-
-	a.lastContent = a.capturePane()
-	if a.lastContent == "" {
-		return
-	}
+	a.started.Store(true)
 
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
+
+	// Prime lastContent; empty is OK — we keep polling.
+	a.mu.Lock()
+	a.lastContent = a.capturePane()
+	if a.lastContent != "" {
+		content := a.lastContent
+		a.mu.Unlock()
+		a.broadcast(content)
+	} else {
+		a.mu.Unlock()
+	}
 
 	for {
 		select {
@@ -106,21 +116,32 @@ func (a *SessionAttach) Start() {
 			return
 		case <-ticker.C:
 			content := a.capturePane()
+			// Empty capture is transient, not fatal — keep polling.
 			if content == "" {
-				return
+				continue
 			}
+			a.mu.Lock()
 			if content != a.lastContent {
 				a.lastContent = content
+				a.mu.Unlock()
 				a.broadcast(content)
+			} else {
+				a.mu.Unlock()
 			}
 		}
 	}
 }
 
 // Stop stops the polling loop and closes all subscriber channels.
+// Safe to call multiple times and safe to call even if Start was never called.
 func (a *SessionAttach) Stop() {
-	close(a.stopCh)
-	<-a.doneCh
+	a.stopOnce.Do(func() {
+		close(a.stopCh)
+	})
+	// Only wait for doneCh if Start() was actually running.
+	if a.started.Load() {
+		<-a.doneCh
+	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()

@@ -10,7 +10,9 @@ import (
 
 func TestIsAvailable(t *testing.T) {
 	t.Parallel()
-	IsAvailable()
+	// Just verify it doesn't panic; result depends on whether tmux is installed
+	available := IsAvailable()
+	t.Logf("tmux available: %v", available)
 }
 
 func TestListSessions_Parsing(t *testing.T) {
@@ -81,4 +83,30 @@ agent-work|1|2|2026/05/23 09:00:00|1
 	if !sessions[1].Attached {
 		t.Error("expected session 1 attached to be true")
 	}
+}
+
+func TestStopWithoutStart(t *testing.T) {
+	t.Parallel()
+	a := NewAttach("nonexistent-session")
+	// Should not deadlock
+	a.Stop()
+}
+
+func TestDoubleStop(t *testing.T) {
+	t.Parallel()
+	a := NewAttach("nonexistent-session")
+	go a.Start()
+	// Give Start a moment to begin
+	time.Sleep(50 * time.Millisecond)
+	// Should not panic on double close
+	a.Stop()
+	a.Stop()
+}
+
+func TestStopWithoutStart_NonEmptyPanic(t *testing.T) {
+	t.Parallel()
+	a := NewAttach("nonexistent-session")
+	// Stop twice without ever starting — must not panic
+	a.Stop()
+	a.Stop()
 }
