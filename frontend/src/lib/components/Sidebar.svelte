@@ -2,7 +2,8 @@
   import { sessions, activeSession, unreadSessionIds } from '$lib/stores/session.svelte.js';
   import { sidebarOpen, groupByProject, sortBy } from '$lib/stores/ui.svelte.js';
   import { selectSession } from '$lib/actions/session.js';
-  import { Zap, FolderOpen, List, Clock, Type, Plus, X, ChevronDown, ChevronRight } from '@lucide/svelte';
+  import { tmuxSessionPickerOpen } from '$lib/stores/tmux.svelte.js';
+  import { Zap, FolderOpen, List, Clock, Type, Plus, X, ChevronDown, ChevronRight, Terminal } from '@lucide/svelte';
 
   let { onNewSession } = $props();
 
@@ -80,6 +81,10 @@
   function toggleProjectGroup(cwd) {
     expandedProjects[cwd] = !expandedProjects[cwd];
   }
+
+  function openTmuxPicker() {
+    tmuxSessionPickerOpen.set(true);
+  }
 </script>
 
 {#snippet sessionItem(session)}
@@ -144,6 +149,13 @@
         title="New Session"
       >
         <Plus size={14} />
+      </button>
+      <button
+        class="text-ctp-green hover:text-ctp-teal flex items-center justify-center p-1 rounded hover:bg-ctp-surface0/50 cursor-pointer"
+        onclick={openTmuxPicker}
+        title="Connect to tmux session"
+      >
+        <Terminal size={14} />
       </button>
       <button
         class="md:hidden text-ctp-overlay0 hover:text-ctp-text flex items-center justify-center p-1 rounded hover:bg-ctp-surface0/50 cursor-pointer"
