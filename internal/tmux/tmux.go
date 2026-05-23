@@ -49,10 +49,9 @@ func ListSessions() ([]Session, error) {
 			continue
 		}
 
-		created, err := time.Parse("2006/01/02 15:04:05", parts[3])
-		if err != nil {
-			continue
-		}
+		// tmux outputs #{session_created} as a Unix timestamp
+		createdUnix, _ := strconv.ParseInt(parts[3], 10, 64)
+		created := time.Unix(createdUnix, 0)
 
 		windows, _ := strconv.Atoi(parts[1])
 		panes, _ := strconv.Atoi(parts[2])

@@ -18,8 +18,8 @@ func TestIsAvailable(t *testing.T) {
 func TestListSessions_Parsing(t *testing.T) {
 	t.Parallel()
 
-	input := `my-project|3|1|2026/05/23 10:30:00|0
-agent-work|1|2|2026/05/23 09:00:00|1
+	input := `my-project|3|1|1779272400|0
+agent-work|1|2|1779266400|1
 `
 
 	var sessions []Session
@@ -34,10 +34,11 @@ agent-work|1|2|2026/05/23 09:00:00|1
 			t.Fatalf("expected 5 parts, got %d for line: %s", len(parts), line)
 		}
 
-		created, err := time.Parse("2006/01/02 15:04:05", parts[3])
+		createdUnix, err := strconv.ParseInt(parts[3], 10, 64)
 		if err != nil {
 			t.Fatalf("failed to parse created time: %v", err)
 		}
+		created := time.Unix(createdUnix, 0)
 
 		windows, _ := strconv.Atoi(parts[1])
 		panes, _ := strconv.Atoi(parts[2])
@@ -72,7 +73,7 @@ agent-work|1|2|2026/05/23 09:00:00|1
 		t.Error("expected session 0 attached to be false")
 	}
 
-	expected := time.Date(2026, 5, 23, 10, 30, 0, 0, time.UTC)
+	expected := time.Unix(1779272400, 0)
 	if !sessions[0].Created.Equal(expected) {
 		t.Errorf("expected session 0 created %v, got %v", expected, sessions[0].Created)
 	}
